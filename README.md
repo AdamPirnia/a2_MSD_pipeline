@@ -41,9 +41,9 @@ The app stitches those steps into a single driver (`main_<run>.py`) and a matchi
 ## Typical Workflow
 
 1. **Common**   – Base directory & number of DCDs.
-2. **Step 1**   – Particles range (`0 to 120`), Resname (`SOL`), etc.
+2. **Step 1**   – Particles range (`e.g. 0 to 120`), Resname (`e.g. TIP3`), etc.
 3. **SLURM**    – Partition, wall‑time, CPUs, email.
-4. **Generate** – Two files appear where you specified.  Submit with `sbatch submit_<run>.sh`.
+4. **Generate** – Two files appear where you specified.  Submit with `<run>.sh`.
 
 The GUI remembers your last inputs in `~/.pipeline_gui_config.json`.
 
