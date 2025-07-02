@@ -57,11 +57,11 @@ Nothing to install—Python 3 and the standard library are bundled into the exe
 
 ## FAQ
 
-|  Q                              |  A                                                                                     |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| *Where is the source?*          | This public repo distributes only the compiled app.                                    |
-| *Does it phone home?*           | No. All computation is local; the only external call is `sbatch`.                      |
-| *Can I rebuild for another OS?* | Clone the private source repo and run the PyInstaller build workflow on that platform. |
+|  Q                                |  A                                                                                     |
+| --------------------------------- | -------------------------------------------------------------------------------------- |
+| *Where is the source?*            | This public repo distributes the compiled app and libraries.                           |
+| *Does it work on local computers? | Yes. In that case, simply ignore the SLURM submission file and run the main code.      |
+| *Can I rebuild for another OS?*   | Clone the private source repo and run the PyInstaller build workflow on that platform. |
 
 ---
 
