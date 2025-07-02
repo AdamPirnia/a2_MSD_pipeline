@@ -1,0 +1,23 @@
+END USER LICENSE AGREEMENT (EULA)
+MD Pipeline App
+Version 1.0
+Effective Date: July 1, 2025
+
+1. License Grant
+Licensor grants you a non-exclusive, non-transferable license to install and use the MD Pipeline App executable (the “Software”) solely for your internal, non-commercial research purposes.
+
+2. Restrictions
+You may not:
+- Decompile, reverse-engineer, disassemble, or otherwise attempt to derive source code from the Software.
+- Redistribute, sublicense, rent, lease, lend, or otherwise transfer the Software to any third party.
+- Use the Software in any manner that infringes third-party rights or violates applicable law.
+- Fail to acknowledge the author in any publication or presentation that uses the Software.
+
+3. Ownership
+The Software (including all modifications, updates, and copied portions) remains the exclusive property of the Licensor. All rights not expressly granted are reserved.
+
+4. Warranty Disclaimer
+THE SOFTWARE IS PROVIDED “AS IS,” WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT. LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL MEET YOUR REQUIREMENTS OR THAT ITS OPERATION WILL BE UNINTERRUPTED OR ERROR-FREE.
+
+5. Limitation of Liability
+UNDER NO CIRCUMSTANCES SHALL LICENSOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR RELATED TO YOUR USE OR INABILITY TO USE THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.

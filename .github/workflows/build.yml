@@ -1,0 +1,36 @@
+name: Build & Publish
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: Build Linux executable
+        run: |
+          pyinstaller \
+            --name a2_MSD_pipeline \
+            --onefile \
+            --add-data "LICENSE.txt:." \
+            a2_MSD_pipeline.py
+
+      - name: Push dist/ to public repo
+        uses: ad-m/github-push-action@v0.6.0
+        with:
+          repository: AdamPirnia/a2_MSD_pipeline    # ← your PUBLIC repo name
+          branch: main
+          github_token: ${{ secrets.PUBLIC_REPO_TOKEN }}   # ← use the PAT you stored as PUBLIC_REPO_TOKEN
+          directory: dist
+
+
