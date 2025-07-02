@@ -17,7 +17,7 @@ $ git clone https://github.com/AdamPirnia/a2_MSD_pipeline.git
 # 2 – usage
     # Linux
         $ ./alpha2_MSD_pip
-    # macOS
+    # macOS (use Intel for INTEL CPUs)
         xattr -dr com.apple.quarantine /path/to/alpha2_MSD_pip_mac
         $ ./alpha2_MSD_pip_mac 
         or
