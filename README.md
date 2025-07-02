@@ -13,17 +13,15 @@ A self‑contained desktop application for generating **Mean‑Square‑Displace
 ```bash
 # 1 – clone the public repo
 $ git clone https://github.com/AdamPirnia/a2_MSD_pipeline.git
-$ cd a2_MSD_pipeline/dist
 
-# 2 – make executable (Linux/macOS)
-$ chmod +x a2_MSD_pipeline
-
-# 3 – run
-$ ./a2_MSD_pipeline        # Linux / macOS | or simply double click on the file.
+# 2 – usage
+$ ./a2_MSD_pipeline        # Linux / macOS
 > a2_MSD_pipeline.exe      # Windows
 ```
 
-The GUI opens—fill in the required (\*) fields, choose output paths for a driver script and SLURM submission file, then click **Generate Files**.
+Or, simply double click on the executable file. 
+The GUI opens. Fill in the required (\*) fields, then click **Generate Files**.
+Since the primary purpose of ths app requires long trajectories, it will generates two files, a SLURM submission file to be used on a remote HPC, and a main python file that uses provided functions to calculate α₂ and MSD. So building a consistent setup in terms of paths (e.g. functions) is crucial.
 
 ---
 
