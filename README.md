@@ -15,8 +15,9 @@ A self‑contained desktop application for generating **Mean‑Square‑Displace
 $ git clone https://github.com/AdamPirnia/a2_MSD_pipeline.git
 
 # 2 – usage
-$ ./a2_MSD_pipeline        # Linux / macOS
-> a2_MSD_pipeline.exe      # Windows
+$ ./alpha2_MSD_pip        # Linux
+$ ./alpha2_MSD_pip_mac    # macOS
+> alpha2_MSD_pip.exe      # Windows - Not provided yet
 ```
 
 Or, simply double click on the executable file. 
