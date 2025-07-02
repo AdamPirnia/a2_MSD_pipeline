@@ -15,12 +15,20 @@ A self‑contained desktop application for generating **Mean‑Square‑Displace
 $ git clone https://github.com/AdamPirnia/a2_MSD_pipeline.git
 
 # 2 – usage
-$ ./alpha2_MSD_pip        # Linux
-$ ./alpha2_MSD_pip_mac    # macOS
+    # Linux
+        $ ./alpha2_MSD_pip
+    # macOS
+        xattr -dr com.apple.quarantine /path/to/alpha2_MSD_pip_mac
+        $ ./alpha2_MSD_pip_mac 
+        or
+        xattr -dr com.apple.quarantine /path/to/alpha2_MSD_pip_mac.app
+        $ ./alpha2_MSD_pip_mac.app
+           
+
 > alpha2_MSD_pip.exe      # Windows - Not provided yet
 ```
 
-Or, simply double click on the executable file. 
+Or, simply double click on the executable file (alpha2_MSD_pip in Linux, or alpha2_MSD_pip_mac.app on Mac OS). 
 The GUI opens. Fill in the required (\*) fields, then click **Generate Files**.
 Since the primary purpose of ths app requires long trajectories, it will generates two files, a SLURM submission file to be used on a remote HPC, and a main python file that uses provided functions to calculate α₂ and MSD. So building a consistent setup in terms of paths (e.g. functions) is crucial.
 
