@@ -2,9 +2,9 @@
 
 A self‑contained desktop application for generating **Mean‑Square‑Displacement (MSD)** and **non‑Gaussian parameter (α₂)** analyses from NAMD DCD trajectories—plus a ready‑to‑submit SLURM job script.
 
-| Artifact                                 | Description                                                       | Platform                           |
-| ---------------------------------------- | ----------------------------------------------------------------- | ---------------------------------- |
-| `` (or `a2_MSD_pipeline.exe` on Windows) | Stand‑alone executable containing the full GUI + analysis engine. | Linux • macOS • Windows (if built) |
+| Artifact                                                | Description                                                       | Platform                           |
+| ------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------- |
+| `a2_MSD_pipeline` (or `a2_MSD_pipeline.exe` on Windows) | Stand‑alone executable containing the full GUI + analysis engine. | Linux • macOS • Windows (if built) |
 
 ---
 
@@ -43,7 +43,7 @@ The app stitches those steps into a single driver (`main_<run>.py`) and a matchi
 ## Typical Workflow
 
 1. **Common**   – Base directory & number of DCDs.
-2. **Step 1**    – Particles range (`0 to 120`), Resname (`SOL`), etc.
+2. **Step 1**   – Particles range (`0 to 120`), Resname (`SOL`), etc.
 3. **SLURM**    – Partition, wall‑time, CPUs, email.
 4. **Generate** – Two files appear where you specified.  Submit with `sbatch submit_<run>.sh`.
 
