@@ -19,7 +19,7 @@ $ cd a2_MSD_pipeline/dist
 $ chmod +x a2_MSD_pipeline
 
 # 3 – run
-$ ./a2_MSD_pipeline        # Linux / macOS
+$ ./a2_MSD_pipeline        # Linux / macOS | or simply double click on the file.
 > a2_MSD_pipeline.exe      # Windows
 ```
 
