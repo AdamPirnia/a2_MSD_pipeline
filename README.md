@@ -63,7 +63,7 @@ The app stitches those steps into a single driver (`<main>.py`) and a matching S
 ## Typical Workflow
 
 1. **Common**   – Base directory & number of DCDs.
-2. **SLURM**    – Partition, wall‑time, CPUs, email.
+2. **SLURM**     – Partition, wall‑time, CPUs, email.
 3. **Generate** – Two files appear where you specified.  Submit with `<run>.sh`.
 
 The GUI remembers your last inputs in `~/.pipeline_gui_config.json`.
@@ -78,25 +78,40 @@ Nothing to install—Python 3 and the standard library are bundled into the exe
 
 ## Considerations
 
-|     Item     |                 Description                                                                                                                   |
-|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
-| **VMD**      | You should have VMD installed prior to running the pipeline, as it’s required for Step 1.                                                     |
-| **Step 1**   | Use a TCL-compatible syntax to fill the fields that VMD will consume. For example:<br>• `Particles: 0 to 120` ← after `residue` in VMD<br>• `Resname: TIP3` ← after `resname` in VMD |
-| **Interval** | Use Python’s `slice` to select a subset of your trajectory. For example:<br>• `Interval: slice(0, 10000)` selects the first 10 000 frames.  |
-| **Stride**   | Use to pick every _n<sup>th</sup>_ frame. For example:<br>• `Stride: 5` runs on frames 0, 5, 10, 15, …                                        |
-| **Modules**  | Keep all `.so` helper files in the same folder as your main Python script (`<main>.py`).                                                      |
+<dl>
+  <dt><strong>VMD</strong></dt>
+  <dd>You should have VMD installed prior to running the pipeline, as it’s required for Step 1.</dd>
 
+  <dt><strong>Step 1</strong></dt>
+  <dd>
+    Use a TCL-compatible syntax to fill the fields that VMD will consume. For example:<br>
+    &emsp;• <code>Particles: 0 to 120</code> ← after <code>residue</code> in VMD<br>
+    &emsp;• <code>Resname: TIP3</code>   ← after <code>resname</code> in VMD
+  </dd>
 
+  <dt><strong>Interval</strong></dt>
+  <dd>
+    Use Python’s <code>slice</code> to select a subset of your trajectory. For example:<br>
+    &emsp;• <code>Interval: slice(0, 10000)</code> selects the first 10 000 frames.
+  </dd>
+
+  <dt><strong>Stride</strong></dt>
+  <dd>
+    Use to pick every <em>n<sup>th</sup></em> frame. For example:<br>
+    &emsp;• <code>Stride: 5</code> runs on frames 0, 5, 10, 15, …
+  </dd>
+
+  <dt><strong>Modules</strong></dt>
+  <dd>Keep all <code>.so</code> files (libraries) in the same folder as your main Python script (<code>&lt;main&gt;.py</code>).</dd>
+</dl>
 
 ---
 
 ## FAQ
 
-|  Q                                 |  A                                                                                     |
-| ---------------------------------- | -------------------------------------------------------------------------------------- |
-| *Where is the source?*             | This public repo distributes the compiled app and libraries.                           |
-| *Does it work on local computers?* | Yes. In that case, simply ignore the SLURM submission file and run the main code.      |
-| *Can I rebuild for another OS?*    | Clone the private source repo and run the PyInstaller build workflow on that platform. |
+1. *Where is the source?*   This public repo distributes the compiled app and libraries. 
+2. *Does it work on local computers?*  Yes. In that case, simply ignore the SLURM submission file and run the main code. 
+3. *Can I rebuild for another OS?*   Clone the private source repo and run the PyInstaller build workflow on that platform. 
 
 ---
 
