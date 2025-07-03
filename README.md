@@ -78,14 +78,14 @@ Nothing to install—Python 3 and the standard library are bundled into the exe
 
 ## Considerations
 
-1. **VMD** – You should have VMD installed prior to running the pipeline, as it’s required for Step 1.
-2. **Step 1** – Use a TCL-compatible syntax to fill the fields that VMD will consume. For example:
-   - ``Particles: `0 to 120` ``  ← comes after `residue` in the VMD command  
-   - ``Resname:   `TIP3` ``      ← comes after `resname` in the VMD command  
-3. **Interval** – Use Python’s `slice` to select a subset of your trajectory. For example:  
-   - ``Interval: `slice(0, 10000)` `` selects the first 10 000 frames.
-4. **Stride** – Use to pick every _n<sup>th</sup>_ frame. For example:  
-   - ``Stride: `5` `` runs on frames 0, 5, 10, 15, …  
+|     Item     |                 Description                                                                                                                   |
+|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| **VMD**      | You should have VMD installed prior to running the pipeline, as it’s required for Step 1.                                                     |
+| **Step 1**   | Use a TCL-compatible syntax to fill the fields that VMD will consume. For example:<br>• `Particles: 0 to 120` ← after `residue` in VMD<br>• `Resname: TIP3` ← after `resname` in VMD |
+| **Interval** | Use Python’s `slice` to select a subset of your trajectory. For example:<br>• `Interval: slice(0, 10000)` selects the first 10 000 frames.  |
+| **Stride**   | Use to pick every _n<sup>th</sup>_ frame. For example:<br>• `Stride: 5` runs on frames 0, 5, 10, 15, …                                        |
+| **Modules**  | Keep all `.so` helper files in the same folder as your main Python script (`<main>.py`).                                                      |
+
 
 
 ---
