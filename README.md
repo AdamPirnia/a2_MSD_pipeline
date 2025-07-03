@@ -41,6 +41,12 @@ Since the primary purpose of ths app requires long trajectories, it will generat
 
 ---
 
+## An example
+
+![An example](example.png)
+
+---
+
 ## What the App Does
 
 | Step | Task                                            | Output             |
@@ -50,16 +56,15 @@ Since the primary purpose of ths app requires long trajectories, it will generat
 |  3   | Center‑of‑Mass calc (`COM_calc`)                | User‑chosen OUTdir |
 |  4   | MSD & α₂ (`alpha2_MSD`)                         | User‑chosen OUTdir |
 
-The app stitches those steps into a single driver (`main_<run>.py`) and a matching SLURM script (`submit_<run>.sh`).
+The app stitches those steps into a single driver (`<main>.py`) and a matching SLURM script (`<submit>.sh`).
 
 ---
 
 ## Typical Workflow
 
 1. **Common**   – Base directory & number of DCDs.
-2. **Step 1**   – Particles range (`e.g. 0 to 120`), Resname (`e.g. TIP3`), etc.
-3. **SLURM**    – Partition, wall‑time, CPUs, email.
-4. **Generate** – Two files appear where you specified.  Submit with `<run>.sh`.
+2. **SLURM**    – Partition, wall‑time, CPUs, email.
+3. **Generate** – Two files appear where you specified.  Submit with `<run>.sh`.
 
 The GUI remembers your last inputs in `~/.pipeline_gui_config.json`.
 
@@ -71,13 +76,27 @@ Nothing to install—Python 3 and the standard library are bundled into the exe
 
 ---
 
+## Considerations
+
+1. **VMD** – You should have VMD installed prior to running the pipeline, as it’s required for Step 1.
+2. **Step 1** – Use a TCL-compatible syntax to fill the fields that VMD will consume. For example:
+   - ``Particles: `0 to 120` ``  ← comes after `residue` in the VMD command  
+   - ``Resname:   `TIP3` ``      ← comes after `resname` in the VMD command  
+3. **Interval** – Use Python’s `slice` to select a subset of your trajectory. For example:  
+   - ``Interval: `slice(0, 10000)` `` selects the first 10 000 frames.
+4. **Stride** – Use to pick every _n<sup>th</sup>_ frame. For example:  
+   - ``Stride: `5` `` runs on frames 0, 5, 10, 15, …  
+
+
+---
+
 ## FAQ
 
-|  Q                                |  A                                                                                     |
-| --------------------------------- | -------------------------------------------------------------------------------------- |
-| *Where is the source?*            | This public repo distributes the compiled app and libraries.                           |
-| *Does it work on local computers? | Yes. In that case, simply ignore the SLURM submission file and run the main code.      |
-| *Can I rebuild for another OS?*   | Clone the private source repo and run the PyInstaller build workflow on that platform. |
+|  Q                                 |  A                                                                                     |
+| ---------------------------------- | -------------------------------------------------------------------------------------- |
+| *Where is the source?*             | This public repo distributes the compiled app and libraries.                           |
+| *Does it work on local computers?* | Yes. In that case, simply ignore the SLURM submission file and run the main code.      |
+| *Can I rebuild for another OS?*    | Clone the private source repo and run the PyInstaller build workflow on that platform. |
 
 ---
 
