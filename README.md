@@ -1,6 +1,7 @@
 # ADMDynAnlz
 
 [![User Manual](https://img.shields.io/badge/User%20Manual-Open-1f6feb)](Manual.md)
+[![Citation](https://img.shields.io/badge/Citation-Open-0a7f5a)](CITATION.md)
 
 ADMDynAnlz is a graphical workflow tool for post-processing molecular dynamics trajectories and generating analysis-ready workflows for transport and dynamical observables.
 
@@ -149,13 +150,11 @@ Unblock-File .\ADMDynAnlz_Windows.exe
 
 This public repository contains the GUI application and user-facing project files needed to run or package the software.
 
-## Help and Project Page
+## Citation
 
-Public project page:
+Per the terms described in `LICENSE.txt`, users of ADMDynAnlz should cite the software when it contributes to published or presented work.
 
-`https://github.com/AdamPirnia/ADMDynAnlz`
-
-The GUI launcher also includes a `?` button that opens this page in the user’s default browser.
+Citation information is provided in [CITATION.md](CITATION.md).
 
 ## License
 

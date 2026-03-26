@@ -1,23 +1,26 @@
 END USER LICENSE AGREEMENT (EULA)
-MD Pipeline App
-Version 2.0.1
-Effective Date: July 1, 2025
+ADMDynAnlz
+Version 2.0
+Effective Date: March 25, 2026
 
 1. License Grant
-Licensor grants you a non-exclusive, non-transferable license to install and use the MD Pipeline App executable (the “Software”) solely for your internal, non-commercial research purposes.
+The Licensor grants you a non-exclusive, non-transferable license to install and use ADMDynAnlz, including its distributed executables and accompanying user-facing files (the "Software"), solely for your internal, non-commercial research purposes.
 
 2. Restrictions
 You may not:
-- Decompile, reverse-engineer, disassemble, or otherwise attempt to derive source code from the Software.
-- Redistribute, sublicense, rent, lease, lend, or otherwise transfer the Software to any third party.
+- Decompile, reverse-engineer, disassemble, or otherwise attempt to derive source code from distributed executable forms of the Software, except where such restriction is prohibited by applicable law.
+- Redistribute, sublicense, rent, lease, lend, sell, or otherwise transfer the Software to any third party without the Licensor's permission.
 - Use the Software in any manner that infringes third-party rights or violates applicable law.
-- Fail to acknowledge the author in any publication or presentation that uses the Software.
+- Present or publish results that materially rely on the Software without acknowledging and citing it as described in the repository citation information.
 
-3. Ownership
-The Software (including all modifications, updates, and copied portions) remains the exclusive property of the Licensor. All rights not expressly granted are reserved.
+3. Citation
+If the Software contributes to a publication, presentation, thesis, report, or other scholarly output, you must acknowledge and cite ADMDynAnlz using the citation information provided with the Software, including the `CITATION.md` file and associated DOI record.
 
-4. Warranty Disclaimer
-THE SOFTWARE IS PROVIDED “AS IS,” WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT. LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL MEET YOUR REQUIREMENTS OR THAT ITS OPERATION WILL BE UNINTERRUPTED OR ERROR-FREE.
+4. Ownership
+The Software, including executables, bundled assets, documentation, updates, and copied portions, remains the exclusive property of the Licensor. All rights not expressly granted are reserved.
 
-5. Limitation of Liability
-UNDER NO CIRCUMSTANCES SHALL LICENSOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR RELATED TO YOUR USE OR INABILITY TO USE THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+5. Warranty Disclaimer
+THE SOFTWARE IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT. THE LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL MEET YOUR REQUIREMENTS OR THAT ITS OPERATION WILL BE UNINTERRUPTED OR ERROR-FREE.
+
+6. Limitation of Liability
+UNDER NO CIRCUMSTANCES SHALL THE LICENSOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR RELATED TO YOUR USE OF OR INABILITY TO USE THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
