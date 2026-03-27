@@ -45,12 +45,22 @@ MSD stands for **Mean Squared Displacement**. It measures the average squared di
 ### NGP
 NGP stands for **Non-Gaussian Parameter**. It measures deviations from ideal Gaussian diffusion and helps identify non-Fickian dynamics.
 
-![alpha2 equation](app_images/equation_alhpa_2.png)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app_images/equation_alhpa_2_dark.png">
+    <img src="app_images/equation_alhpa_2.png" alt="alpha2 equation" width="62%">
+  </picture>
+</p>
 
 ### Anisotropy Parameter
 The anisotropy parameter quantifies directional anisotropy in molecular translational motion.
 
-![alpha anisotropy equation](app_images/equation_alhpa_ani.png)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app_images/equation_alhpa_ani_dark.png">
+    <img src="app_images/equation_alhpa_ani.png" alt="alpha anisotropy equation" width="72%">
+  </picture>
+</p>
 
 ### COM
 COM stands for **center of mass**.
