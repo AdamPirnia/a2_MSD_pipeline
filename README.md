@@ -5,11 +5,12 @@
 
 ADMDynAnlz is a graphical workflow tool for post-processing molecular dynamics trajectories and generating analysis-ready workflows for transport and dynamical observables.
 
-The application currently provides three GUI modules:
+The application currently provides four GUI modules:
 
 - `Coordinates extraction`
 - `Velocities and Dipoles`
 - `MSD and NGP / Anisotropic NGP`
+- `Correlation Functions`
 
 Detailed section-by-section instructions are available in [Manual.md](Manual.md).
 
@@ -91,6 +92,18 @@ This module generates workflows for:
 - **NGP**: Non-Gaussian Parameter
 - **Anisotropy parameter**
 
+### 4. Correlation Functions
+This module generates workflows for time-correlation analysis on numeric data arrays.
+
+It supports:
+
+- scalar-scalar correlation
+- vector-vector correlation
+- single-variable mode
+- multiple-variable mode averaged across variables
+- `acf` mode with mean subtraction
+- `fluctuation` mode without mean subtraction
+
 ## What the Software Does
 
 ADMDynAnlz is designed to help users:
@@ -113,6 +126,8 @@ python3 ADMDynAnlz_launcher.py
 ```
 
 All entrypoints open a launcher window where you select the module you want to use.
+
+The Qt interface is now the primary GUI.
 
 ## Running Downloaded Executables
 

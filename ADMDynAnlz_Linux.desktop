@@ -8,4 +8,4 @@ Icon=/media/adam/adam2/repos/a2_MSD_source/dist/ADMDynAnlz_Linux.png
 Terminal=false
 Categories=Science;Education;
 StartupWMClass=ADMDynAnlz
-Keywords=molecular;dynamics;analysis;MSD;NGP;dipole;velocity;
+Keywords=molecular;dynamics;analysis;MSD;NGP;dipole;velocity;correlation;ACF;

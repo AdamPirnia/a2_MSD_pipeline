@@ -2,6 +2,8 @@
 
 This manual explains what each module does, what each section is for, what to enter in each input field, and how the main options affect the generated workflow.
 
+The Qt interface is now the primary ADMDynAnlz GUI. The Tk interface remains available as a legacy fallback.
+
 ## General Concepts
 
 ### Base Directory
@@ -408,6 +410,71 @@ When enabled, the generated calculation includes validation checks on the input 
 
 When disabled, the workflow runs without those additional checks and may be faster on already trusted inputs.
 
+## Module 4: Correlation Functions
+
+This module generates scripts for time-correlation analysis from numeric array files that already exist on disk.
+
+## Common Parameters
+
+- `Base Directory`: root folder for correlation inputs and outputs
+- `Number of DCDs`: total number of indexed files to process
+- `Number of Particles`: retained for consistency with other modules
+- `Common Terms`: two optional shared replacement fields for `*` and `**` in file patterns
+- `Max Workers`: retained for workflow consistency; current correlation generation runs serially
+
+## Correlation Function Parameters
+
+Fields:
+
+- `Array 1 Pattern`: full input `path + filename + extension` pattern for the first numeric array
+- `Array 2 Pattern`: full input `path + filename + extension` pattern for the second numeric array
+- `Output Pattern`: full output `path + filename + extension` pattern for the generated correlation results
+- `Lag Step (delta)`: frame or sample stride used in the correlation sum
+- `Maximum Lag`: largest lag index to evaluate
+- `Time per Lag (t1)`: physical time corresponding to one lag increment
+- `Vector Coefficient`: scaling factor used for vector-vector correlations; the standard choice is `3`
+- `DCD Selection (optional)`: optional subset of indices to process
+- `Array 1 Type`: choose `scalar` or `vector`
+- `Array 2 Type`: choose `scalar` or `vector`
+- `Variable Count`: choose `single` or `multiple`
+- `Correlation Mode`: choose `acf` or `fluctuation`
+
+## Precision
+
+The correlation module provides precision settings for:
+
+- `Array 1 input`
+- `Array 2 input`
+- `Output files`
+
+These settings control whether the generated script reads and writes text or binary numeric files and how numeric precision is handled.
+
+## How the type and mode choices work
+
+### Scalar vs vector
+
+- `scalar`: use this when each frame contains scalar values
+- `vector`: use this when each frame contains 3-component vectors
+
+### Single vs multiple
+
+- `single`: one scalar time series or one vector time series per file
+- `multiple`: many scalar variables or many vectors contained in the same file, averaged together in the final normalized correlation
+
+### Correlation Mode
+
+- `acf`: subtracts the mean from each input before computing the correlation
+- `fluctuation`: computes the correlation directly from the raw input without subtracting the mean
+
+## Current limitation
+
+The current module supports:
+
+- scalar-scalar correlations
+- vector-vector correlations
+
+It does not currently support mixed scalar/vector pairs in one calculation.
+
 ## Choosing output folder and script names
 
 A good practice is to use a distinct `Output folder name` for each module or each run configuration, for example:
@@ -415,6 +482,7 @@ A good practice is to use a distinct `Output folder name` for each module or eac
 - `coords_output`
 - `vel_dipole_output`
 - `ngp_output`
+- `corr_output`
 
 This keeps generated scripts and submit files separate and makes `Multi-Run Anlz.` easier to use.
 
@@ -425,6 +493,7 @@ For a standard coordinate-to-analysis workflow:
 1. Use `Coordinates extraction` to generate extracted, continuous, and COM data.
 2. Use `Velocities and Dipoles` if you need velocity or dipole workflows.
 3. Use `MSD and NGP / Anisotropic NGP` on the COM outputs.
+4. Use `Correlation Functions` when you already have numeric scalar or vector arrays and want correlation-analysis scripts for them.
 
 ## Final notes
 
