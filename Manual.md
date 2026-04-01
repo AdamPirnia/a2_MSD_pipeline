@@ -16,6 +16,8 @@ Many fields expect a file pattern rather than a single file name.
 
 When a field asks for a `Pattern`, it expects a full path or a full `path + filename`, depending on the section. For numeric data files generated or reused by ADMDynAnlz, the safest rule is to provide the full `path + filename + extension`.
 
+Paths containing spaces, parentheses, and similar non-regular characters are supported. It is still best to enter the exact full path carefully so that missing-file validation can catch real typos.
+
 - `*` is replaced by the value of `Common Term`
 - `{i}` is replaced by the DCD index
 
@@ -189,6 +191,7 @@ Fields:
 - `DCD Pattern`: pattern pointing to input trajectory DCD files
 - `Output Pattern`: full output `path + filename + extension` pattern for extracted coordinate files
 - `Target Selections`: VMD atom selection string, such as `water`, `protein`, or a more specific selection
+- `?` help button: opens the VMD atom-selection reference in your default browser
 - `VMD path`: full path to the VMD executable
 - `DCD Selection (optional)`: optional subset of DCD indices to extract
 - `Stride (optional)`: frame sampling stride; use `1` for every frame, `10` for every tenth frame
@@ -262,6 +265,18 @@ What this section does:
 - applies the supplied masses
 - computes center-of-mass positions frame by frame
 
+How molecule or particle boundaries are determined:
+
+- this step assumes the atoms in each frame are ordered molecule-by-molecule in a consistent repeating pattern
+- `Atoms per particle` tells the software how many consecutive atoms belong to one molecule or particle
+- the first `Atoms per particle` atoms are treated as particle 1, the next block as particle 2, and so on
+- the `Mass list` must match that per-particle atom order
+
+Example:
+
+- if water is stored as `O H H O H H ...`, then `Atoms per particle = 3`
+- the software groups atoms as `(O,H,H)`, `(O,H,H)`, `(O,H,H)`, ...
+
 ## Module 2: Velocities and Dipoles
 
 This module contains two workflows in separate tabs.
@@ -288,9 +303,21 @@ Fields:
 - `PSF Pattern`: pattern for the PSF files
 - `VELDCD Pattern`: pattern for velocity-trajectory files
 - `Output Pattern`: full output `path + filename + extension` pattern for generated velocity files
-- `Number of Molecules`: number of molecules for COM velocity extraction
+- `Stride`: frame sampling stride for velocity extraction
 - `VMD Executable Path`: full path to the VMD executable
 - `DCD Selection (optional)`: optional subset of DCD indices to process
+
+Notes:
+
+- this workflow uses the module-level `Number of Particles` value from `Common Parameters`
+- there is no separate velocity-only molecule-count input
+
+How molecule or particle boundaries are determined:
+
+- the velocity workflow assumes the velocity trajectory follows the same particle ordering as the structure
+- `Number of Particles` tells the workflow how many molecule or residue COM velocities to extract
+- the VMD script computes one center-of-mass velocity per particle/residue in that ordering
+- for correct results, the PSF and velocity trajectory must describe the same system ordering
 
 What this section does:
 
@@ -316,6 +343,7 @@ Use these fields:
 - `Dipole Magnitudes Pattern`: full output `path + filename + extension` pattern for dipole-magnitude files
 - `Atomic charges`: comma-separated atomic charges for one molecule
 - `Atoms per molecule`: number of atoms in each molecule
+- `Stride`: frame sampling stride for individual dipole calculation
 - `DCD Selection (optional)`: optional subset of DCD indices to process
 - `Neutral molecule(s)`: indicates that the molecules are neutral and the calculation should treat them accordingly
 
@@ -324,6 +352,24 @@ What it does:
 - loads coordinate data for each molecule
 - uses the supplied charges
 - computes dipole vectors and magnitudes for each frame
+
+How individual molecules are distinguished:
+
+- this workflow assumes the atomic coordinates are ordered molecule-by-molecule in a consistent repeating pattern
+- `Atoms per molecule` tells the software how many consecutive atoms belong to one molecule
+- `Atomic charges` are applied to each molecule using that same atom order
+- the first `Atoms per molecule` atoms are treated as molecule 1, the next block as molecule 2, and so on
+
+Example:
+
+- if each water molecule is stored as `O H H`, use `Atoms per molecule = 3`
+- the software interprets the coordinates as `(O,H,H)`, `(O,H,H)`, `(O,H,H)`, ...
+
+Important input note:
+
+- `Coordinates Pattern` must point to per-atom coordinates, for example `xyz` or `unwr_xyz`
+- do not use COM-coordinate files such as `com_xyz` as the dipole coordinate input
+- if the atom ordering in the coordinate file does not follow the expected repeating per-molecule pattern, the dipole grouping will be wrong
 
 ### If `Calculation Method = collective`
 
@@ -459,12 +505,19 @@ These settings control whether the generated script reads and writes text or bin
 ### Single vs multiple
 
 - `single`: one scalar time series or one vector time series per file
-- `multiple`: many scalar variables or many vectors contained in the same file, averaged together in the final normalized correlation
+- `multiple`: many scalar variables or many vectors contained in the same file, averaged together in the final correlation
 
 ### Correlation Mode
 
 - `acf`: subtracts the mean from each input before computing the correlation
 - `fluctuation`: computes the correlation directly from the raw input without subtracting the mean
+
+### Correlation normalization
+
+The correlation module does not divide the output by the `t = 0` correlation value.
+
+- scalar and vector results are written as raw correlations
+- for vector-vector correlations, the `Vector Coefficient` still applies its usual scaling
 
 ## Current limitation
 

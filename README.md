@@ -85,6 +85,13 @@ This module generates workflows for:
 - computing individual molecular dipoles
 - computing collective dipole signals for selected groups
 
+Current behavior highlights:
+
+- velocity extraction uses the module-level `Number of Particles` setting
+- stride control is available for velocity extraction and individual dipole calculations
+- generated scripts handle paths with spaces and other non-regular characters more robustly when launching VMD
+- per-molecule workflows assume atoms are ordered in consistent repeating blocks, such as `O H H | O H H | ...`, and use fields like `Atoms per particle`, `Atoms per molecule`, and `Number of Particles` to group them
+
 ### 3. MSD and NGP / Anisotropic NGP
 This module generates workflows for:
 
@@ -103,6 +110,8 @@ It supports:
 - multiple-variable mode averaged across variables
 - `acf` mode with mean subtraction
 - `fluctuation` mode without mean subtraction
+
+The reported correlation values are not normalized by the `t = 0` correlation.
 
 ## What the Software Does
 
