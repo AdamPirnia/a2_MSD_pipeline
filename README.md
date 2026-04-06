@@ -251,6 +251,33 @@ This public repository contains the GUI application and user-facing project file
 
 Large Linux binaries may be distributed as GitHub release assets rather than regular repository files.
 
+For maintainers updating the Linux build:
+
+- the Linux executable is published as a GitHub release asset rather than being committed into repository history
+- this avoids rapid repository bloat from repeated large binary updates
+
+To publish the Linux executable as a release asset, authentication can be provided by:
+
+- `PUBLIC_REPO_TOKEN`
+- `GITHUB_TOKEN`
+- `GH_TOKEN`
+- `gh auth token` after logging in with GitHub CLI
+
+To create a GitHub token:
+
+1. Sign in to GitHub.
+2. Open `Settings`.
+3. Open `Developer settings`.
+4. Open `Personal access tokens`.
+5. Create a token with repository access for the target public repo.
+
+Example:
+
+```bash
+export PUBLIC_REPO_TOKEN=your_token_here
+./publish_linux_to_public.sh
+```
+
 ## Citation
 
 Per the terms described in `LICENSE.txt`, users of ADMDynAnlz should cite the software when it contributes to published or presented work.

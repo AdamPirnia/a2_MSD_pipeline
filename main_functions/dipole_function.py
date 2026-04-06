@@ -126,7 +126,14 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, com_pattern, 
             
         # Load data
         print(f"  Loading data from files...")
-        coord_data = _load_array(coord_file, dtype=np.float32, io_spec=coords_input_io_spec)
+        try:
+            coord_data = _load_array(coord_file, dtype=np.float32, io_spec=coords_input_io_spec)
+        except Exception as exc:
+            coord_hint = ""
+            coord_basename = os.path.basename(coord_file).lower()
+            if coord_basename.startswith("com_") or "/com_" in coord_file.lower():
+                coord_hint = " Neutral individual dipoles still require atomic coordinate files in Coordinates Pattern; COM files are not valid coordinate input."
+            raise ValueError(f"{exc}{coord_hint}") from exc
         if neutral:
             com_data = None
             print(f"  Loaded coords: {coord_data.shape}, COM: skipped (neutral molecules)")
@@ -205,6 +212,20 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, com_pattern, 
         save_numeric_array(
             magnitude_path,
             dipole_magnitudes,
+            magnitudes_output_io_spec,
+            default_mode="text",
+            default_precision="double",
+        )
+
+        # Verify outputs immediately so binary/text mismatches fail here instead of later modules.
+        load_numeric_array(
+            dipole_path,
+            vectors_output_io_spec,
+            default_mode="text",
+            default_precision="double",
+        )
+        load_numeric_array(
+            magnitude_path,
             magnitudes_output_io_spec,
             default_mode="text",
             default_precision="double",
