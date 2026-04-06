@@ -84,6 +84,28 @@ expands across all combinations:
 
 The generated workflow handles the nested looping. The low-level analysis functions still receive fully expanded concrete paths.
 
+### VMD Path on macOS and Windows
+
+For any field that asks for a `VMD Path` or `VMD Executable Path`, enter the actual VMD executable path or an actual runnable launcher command.
+
+Do not rely on:
+
+- shell aliases that exist only in your interactive terminal
+- desktop shortcuts
+- wrapper entries that work only when expanded by the shell
+
+Platform guidance:
+
+- macOS: use the real path from inside the VMD application bundle rather than an alias such as `vmd`
+- Windows: use the actual `vmd.exe` path rather than a shortcut or non-executable launcher entry
+
+Generic examples:
+
+- macOS: `/Applications/VMD ... .app/Contents/MacOS/...`
+- Windows: `C:\Program Files\VMD\...\vmd.exe`
+
+If `vmd` works in your terminal but the generated workflow says it cannot find VMD, that usually means your terminal is using an alias or wrapper that the generated workflow cannot use directly.
+
 ### Precision
 
 Each relevant section has a `Precision` button near the `Skip` checkbox. The current setting is always shown next to that button. This applies only to ADMDynAnlz numeric data files, not to external structure or trajectory files such as `PSF`, `DCD`, `VELDCD`, or `XSC`.

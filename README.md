@@ -154,6 +154,18 @@ ADMDynAnlz is designed to help users:
 - `numpy`
 - VMD for trajectory-based extraction steps
 
+For any `VMD Path` field, enter the actual VMD executable path or an actual runnable launcher command. Do not rely on shell aliases.
+
+Platform notes:
+
+- macOS: use the real executable or launcher path from the VMD application bundle, not an alias such as `vmd` defined only in your interactive shell
+- Windows: use the real `vmd.exe` path, not a desktop shortcut or a shell-only wrapper command
+
+Generic examples:
+
+- macOS: `/Applications/VMD ... .app/Contents/MacOS/...`
+- Windows: `C:\Program Files\VMD\...\vmd.exe`
+
 ## Python Environment Setup
 
 Create a virtual environment named `admdyn`, activate it, and install the required Python packages before running the GUI or any generated analysis scripts.
@@ -188,6 +200,8 @@ python3 ADMDynAnlz_launcher.py
 ```
 
 All entrypoints open a launcher window where you select the module you want to use.
+
+If a generated workflow cannot find VMD even though `vmd` works in your terminal, the most common reason is that your shell is using an alias or wrapper that the generated scripts cannot see. In that case, enter the actual VMD executable path in the GUI instead.
 
 ## Running Downloaded Executables
 
