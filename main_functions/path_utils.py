@@ -6,6 +6,9 @@ Handles expansion of path patterns with common parameters and file indices.
 Supports patterns like: path/to_*_files/input_file_name_{i}.dat
 """
 import os
+import re
+
+_SAFE_INDEX_EXPR = re.compile(r"^i(?:\s*[+\-*/]\s*\d+)?$")
 
 def expand_path_pattern(pattern, common_param="", file_index=None):
     """
@@ -44,16 +47,13 @@ def expand_path_pattern(pattern, common_param="", file_index=None):
     
     # Replace {i} expressions with file index if provided
     if file_index is not None:
-        # Handle arithmetic expressions like {i+1}, {i-1}, etc.
-        import re
-        
         def replace_expression(match):
-            expr = match.group(1)
+            expr = match.group(1).strip()
             try:
                 # Create a safe namespace with only 'i' variable
                 namespace = {'i': file_index}
                 # Evaluate the expression safely (only allows basic arithmetic)
-                if re.match(r'^i[\+\-\*/]\d+$|^i$', expr):
+                if _SAFE_INDEX_EXPR.match(expr):
                     return str(eval(expr, {"__builtins__": {}}, namespace))
                 else:
                     # If expression is not safe, return as-is
@@ -91,20 +91,17 @@ def validate_path_pattern(pattern):
     if not pattern:
         return True, ""
     
-    # Check for multiple {i} patterns
-    i_count = pattern.count('{i}')
-    if i_count > 1:
-        return False, "Multiple {i} indices not supported"
-    
-    # Check for other format strings that might cause issues
-    import re
-    format_matches = re.findall(r'\{[^i}]+\}', pattern)
-    if format_matches:
-        return False, f"Unsupported format placeholders: {', '.join(format_matches)}. Only {{i}} is supported."
-    
     # Check for unmatched braces
     if pattern.count('{') != pattern.count('}'):
         return False, "Unmatched braces in pattern"
+
+    placeholders = re.findall(r'\{([^}]+)\}', pattern)
+    invalid = [f"{{{expr}}}" for expr in placeholders if not _SAFE_INDEX_EXPR.match(expr.strip())]
+    if invalid:
+        return False, (
+            f"Unsupported format placeholders: {', '.join(invalid)}. "
+            "Supported forms are {i}, {i+N}, {i-N}, {i*N}, and {i/N}."
+        )
     
     return True, ""
 
@@ -134,7 +131,7 @@ def get_pattern_info(pattern):
         }
     
     has_common_param = '*' in pattern
-    has_file_index = '{i}' in pattern
+    has_file_index = bool(re.search(r'\{[^}]+\}', pattern))
     
     # Split into directory and filename parts
     base_dir = os.path.dirname(pattern)

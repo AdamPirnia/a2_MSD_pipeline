@@ -18,7 +18,10 @@ except ImportError:
         load_numeric_array,
         save_numeric_array,
     )
+import re
 # Inlined path_utils functions to keep generated/runtime scripts self-contained
+_SAFE_INDEX_EXPR = re.compile(r"^i(?:\s*[+\-*/]\s*\d+)?$")
+
 def expand_path_pattern(pattern, common_param="", file_index=None):
     """Expand a path pattern with common parameter and file index."""
     if pattern is None:
@@ -35,10 +38,10 @@ def expand_path_pattern(pattern, common_param="", file_index=None):
         import re
         
         def replace_expression(match):
-            expr = match.group(1)
+            expr = match.group(1).strip()
             try:
                 namespace = {'i': file_index}
-                if re.match(r'^i[\+\-\*/]\d+$|^i$', expr):
+                if _SAFE_INDEX_EXPR.match(expr):
                     return str(eval(expr, {"__builtins__": {}}, namespace))
                 else:
                     return match.group(0)
@@ -54,20 +57,17 @@ def validate_path_pattern(pattern):
     if not pattern:
         return True, ""
     
-    # Check for multiple {i} patterns
-    i_count = pattern.count('{i}')
-    if i_count > 1:
-        return False, "Multiple {i} indices not supported"
-    
-    # Check for other format strings that might cause issues
-    import re
-    format_matches = re.findall(r'\{[^i}]+\}', pattern)
-    if format_matches:
-        return False, f"Unsupported format placeholders: {', '.join(format_matches)}. Only {{i}} is supported."
-    
     # Check for unmatched braces
     if pattern.count('{') != pattern.count('}'):
         return False, "Unmatched braces in pattern"
+
+    placeholders = re.findall(r'\{([^}]+)\}', pattern)
+    invalid = [f"{{{expr}}}" for expr in placeholders if not _SAFE_INDEX_EXPR.match(expr.strip())]
+    if invalid:
+        return False, (
+            f"Unsupported format placeholders: {', '.join(invalid)}. "
+            "Supported forms are {i}, {i+N}, {i-N}, {i*N}, and {i/N}."
+        )
     
     return True, ""
 

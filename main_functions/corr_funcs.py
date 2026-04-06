@@ -9,8 +9,10 @@ import numpy as np
 
 try:
     from .numeric_io import load_numeric_array, save_numeric_array
+    from .path_utils import expand_path_pattern
 except ImportError:
     from numeric_io import load_numeric_array, save_numeric_array
+    from path_utils import expand_path_pattern
 
 
 def _validate_sampling(delta: int, max_lag: int, length: int) -> tuple[int, int]:
@@ -243,8 +245,7 @@ def nonNormal_corrF_vec(array, delta, max_lag, t1):
 
 
 def _expand_pattern(pattern: str, file_index: int, common_term: str = "") -> str:
-    expanded = str(pattern).replace("*", common_term or "")
-    return expanded.format(i=file_index)
+    return expand_path_pattern(pattern, common_term, file_index)
 
 
 def calculate_correlation_from_files(
