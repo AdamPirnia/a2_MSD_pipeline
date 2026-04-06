@@ -5,6 +5,8 @@
 
 ADMDynAnlz is a graphical workflow tool for post-processing molecular dynamics trajectories and generating analysis-ready workflows for transport and dynamical observables.
 
+The current distributed application is the Qt GUI.
+
 The application currently provides four GUI modules:
 
 - `Coordinates extraction`
@@ -78,6 +80,12 @@ This module prepares trajectory-derived data for downstream analysis. It include
 3. `COM calculation`
    Computes center-of-mass trajectories for molecules or coarse-grained units.
 
+Typical outputs and units:
+
+- extracted atomic coordinates: same length unit as the input trajectory coordinates
+- continuous / unwrapped atomic coordinates: same length unit as the input trajectory coordinates
+- center-of-mass coordinates: same length unit as the input trajectory coordinates
+
 ### 2. Velocities and Dipoles
 This module generates workflows for:
 
@@ -89,8 +97,15 @@ Current behavior highlights:
 
 - velocity extraction uses the module-level `Number of Particles` setting
 - stride control is available for velocity extraction and individual dipole calculations
-- generated scripts handle paths with spaces and other non-regular characters more robustly when launching VMD
-- per-molecule workflows assume atoms are ordered in consistent repeating blocks, such as `O H H | O H H | ...`, and use fields like `Atoms per particle`, `Atoms per molecule`, and `Number of Particles` to group them
+- individual dipole workflows assume atoms are ordered in consistent repeating blocks, such as `O H H | O H H | ...`
+
+Typical outputs and units:
+
+- COM velocities: same velocity unit as the input velocity trajectory
+- individual dipole vectors: Debye
+- individual dipole magnitudes: Debye
+- collective dipole magnitude: Debye
+- collective dipole vector components: same dipole unit returned by VMD for the collective vector output
 
 ### 3. MSD and NGP / Anisotropic NGP
 This module generates workflows for:
@@ -98,6 +113,12 @@ This module generates workflows for:
 - **MSD**: Mean Squared Displacement
 - **NGP**: Non-Gaussian Parameter
 - **Anisotropy parameter**
+
+Typical outputs and units:
+
+- MSD: squared length in the square of the coordinate unit
+- NGP `α₂(t)`: dimensionless
+- directional anisotropy outputs and anisotropy parameter: dimensionless
 
 ### 4. Correlation Functions
 This module generates workflows for time-correlation analysis on numeric data arrays.
@@ -112,6 +133,11 @@ It supports:
 - `fluctuation` mode without mean subtraction
 
 The reported correlation values are not normalized by the `t = 0` correlation.
+
+Typical outputs and units:
+
+- time column: same time unit as `Time per Lag (t1)`
+- correlation column: product of the units of the two input arrays
 
 ## What the Software Does
 
@@ -135,8 +161,6 @@ python3 ADMDynAnlz_launcher.py
 ```
 
 All entrypoints open a launcher window where you select the module you want to use.
-
-The distributed application is the Qt GUI.
 
 ## Running Downloaded Executables
 

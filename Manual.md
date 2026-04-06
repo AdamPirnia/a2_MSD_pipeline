@@ -215,6 +215,10 @@ Practical effect:
 
 Use it when your workflow benefits from first producing wrapped coordinates and then reconstructing continuity later. If you already have a suitable wrapped coordinate representation, Step 2 can then convert it into continuous coordinates.
 
+Output unit:
+
+- extracted coordinate files use the same length unit as the input trajectory coordinates
+
 ## Step 2: Continuous coordinates
 
 This step removes periodic-boundary discontinuities and reconstructs continuous particle trajectories.
@@ -239,6 +243,10 @@ What this section does:
 - reads wrapped coordinates
 - uses the box information from the XSC file
 - reconstructs continuous trajectories across periodic boundaries
+
+Output unit:
+
+- continuous-coordinate files use the same length unit as the input trajectory coordinates
 
 Use `auto` for `Chunk Size` when you want the software to choose a safe value, or run `Smart Optimization` first and use the recommended value.
 
@@ -276,6 +284,10 @@ Example:
 
 - if water is stored as `O H H O H H ...`, then `Atoms per particle = 3`
 - the software groups atoms as `(O,H,H)`, `(O,H,H)`, `(O,H,H)`, ...
+
+Output unit:
+
+- COM files use the same length unit as the input trajectory coordinates
 
 ## Module 2: Velocities and Dipoles
 
@@ -325,6 +337,10 @@ What this section does:
 - extracts velocity information for each selected trajectory
 - writes generated velocity-analysis workflow files
 
+Output unit:
+
+- velocity files use the same velocity unit as the input velocity trajectory
+
 ## Dipole Calculations tab
 
 This workflow can generate either individual dipole scripts or collective dipole scripts.
@@ -352,6 +368,11 @@ What it does:
 - loads coordinate data for each molecule
 - uses the supplied charges
 - computes dipole vectors and magnitudes for each frame
+
+Output units:
+
+- dipole vector files are written in Debye
+- dipole magnitude files are written in Debye
 
 How individual molecules are distinguished:
 
@@ -393,6 +414,12 @@ Notes:
 
 - both individual and collective fields are visible in the tab, but the selected `Calculation Method` determines which workflow the generated script uses
 - `Skip` disables the dipole block entirely
+
+Output units:
+
+- the collective output file contains frame index, dipole vector components, and dipole magnitude
+- the dipole magnitude is in Debye
+- the vector components use the dipole unit returned by VMD for the collective vector output
 
 ## Module 3: MSD and NGP / Anisotropic NGP
 
@@ -442,6 +469,11 @@ the generated files will use that base path and produce module-specific result n
 - `ngp_results_MSD.dat`
 - `ngp_results_a2.dat`
 
+Output units:
+
+- MSD output is in squared length, using the square of the coordinate unit
+- `α₂(t)` output is dimensionless
+
 ### If `Calculation Type = alpha_xz`
 
 The generated workflow computes anisotropy-related quantities, including the anisotropy parameter `α_{ani}(t)`.
@@ -449,6 +481,10 @@ The generated workflow computes anisotropy-related quantities, including the ani
 Use this when you want directional anisotropy information rather than the standard `α₂(t)` and MSD workflow.
 
 The `Output File Pattern` is again used as the base name, and the anisotropy workflow generates related result files derived from that base name.
+
+Output units:
+
+- `α_xz(t)`, `α_xy(t)`, `α_yz(t)`, and the anisotropy parameter are dimensionless
 
 ### What `Validate Data` does
 
@@ -518,6 +554,11 @@ The correlation module does not divide the output by the `t = 0` correlation val
 
 - scalar and vector results are written as raw correlations
 - for vector-vector correlations, the `Vector Coefficient` still applies its usual scaling
+
+Output units:
+
+- the first output column uses the same time unit as `Time per Lag (t1)`
+- the second output column uses the product of the units of the two input arrays
 
 ## Current limitation
 
