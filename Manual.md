@@ -18,10 +18,11 @@ When a field asks for a `Pattern`, it expects a full path or a full `path + file
 
 Paths containing spaces, parentheses, and similar non-regular characters are supported. It is still best to enter the exact full path carefully so that missing-file validation can catch real typos.
 
-- `*` is replaced by the value of `Common Term`
+- `*` is replaced by the value of `Common Term 1`
+- `**` is replaced by the value of `Common Term 2`
 - `{i}` is replaced by the DCD index
 
-Example:
+Example with one common term:
 
 ```text
 anlz/NVT_*/wrapped/xyz_{i}.dat
@@ -32,6 +33,20 @@ If `Common Term = sqp`, the pattern becomes:
 ```text
 anlz/NVT_sqp/wrapped/xyz_0.dat
 anlz/NVT_sqp/wrapped/xyz_1.dat
+...
+```
+
+Example with two common terms:
+
+```text
+anlz/*/**/wrapped/xyz_{i}.dat
+```
+
+If `Common Term 1 = NVT` and `Common Term 2 = 300`, the pattern becomes:
+
+```text
+anlz/NVT/300/wrapped/xyz_0.dat
+anlz/NVT/300/wrapped/xyz_1.dat
 ...
 ```
 

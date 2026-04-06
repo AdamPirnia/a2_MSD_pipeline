@@ -154,6 +154,33 @@ ADMDynAnlz is designed to help users:
 - `numpy`
 - VMD for trajectory-based extraction steps
 
+## Python Environment Setup
+
+Create a virtual environment named `admdyn`, activate it, and install the required Python packages before running the GUI or any generated analysis scripts.
+
+### macOS and Linux
+
+```bash
+python3 -m venv admdyn
+source admdyn/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install numpy pandas psutil Pillow PySide6 pyinstaller scipy matplotlib
+```
+
+Optional verification:
+
+```bash
+python -c "import numpy, pandas, psutil, PIL, PySide6; print('ok')"
+```
+
+When the environment is active, your shell prompt usually starts with `(admdyn)`.
+
+To leave the environment later:
+
+```bash
+deactivate
+```
+
 ## Running the GUI
 
 ```bash
