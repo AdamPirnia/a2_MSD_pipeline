@@ -136,7 +136,7 @@ python3 ADMDynAnlz_launcher.py
 
 All entrypoints open a launcher window where you select the module you want to use.
 
-The Qt interface is now the primary GUI.
+The distributed application is the Qt GUI.
 
 ## Running Downloaded Executables
 

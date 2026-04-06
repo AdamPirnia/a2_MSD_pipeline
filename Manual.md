@@ -2,7 +2,7 @@
 
 This manual explains what each module does, what each section is for, what to enter in each input field, and how the main options affect the generated workflow.
 
-The Qt interface is now the primary ADMDynAnlz GUI. The Tk interface remains available as a legacy fallback.
+The Qt interface is now the maintained ADMDynAnlz GUI.
 
 ## General Concepts
 
