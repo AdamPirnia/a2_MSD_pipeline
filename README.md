@@ -235,6 +235,8 @@ Unblock-File .\ADMDynAnlz_Windows.exe
 
 This public repository contains the GUI application and user-facing project files needed to run or package the software.
 
+Large Linux binaries may be distributed as GitHub release assets rather than regular repository files.
+
 ## Citation
 
 Per the terms described in `LICENSE.txt`, users of ADMDynAnlz should cite the software when it contributes to published or presented work.
