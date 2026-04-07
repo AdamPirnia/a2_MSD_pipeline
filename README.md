@@ -150,7 +150,8 @@ ADMDynAnlz is designed to help users:
 
 ## Requirements
 
-- Python 3
+- Python 3.10 or newer
+- Python 3.12 recommended
 - `numpy`
 - VMD for trajectory-based extraction steps
 
@@ -168,13 +169,15 @@ Generic examples:
 
 ## Python Environment Setup
 
-Create a virtual environment named `admdyn`, activate it, and install the required Python packages before running the GUI or any generated analysis scripts.
+ADMDynAnlz now uses Python features that require Python 3.10 or newer. The recommended setup is a Conda environment named `admdyn` with Python 3.12 so you do not need to change your system-default Python.
 
 ### macOS and Linux
 
+If you do not already have Conda installed, install Miniconda or Anaconda first. Then create and activate the environment:
+
 ```bash
-python3 -m venv admdyn
-source admdyn/bin/activate
+conda create -n admdyn python=3.12
+conda activate admdyn
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install numpy pandas psutil Pillow PySide6 pyinstaller scipy matplotlib
 ```
@@ -182,6 +185,7 @@ python -m pip install numpy pandas psutil Pillow PySide6 pyinstaller scipy matpl
 Optional verification:
 
 ```bash
+python --version
 python -c "import numpy, pandas, psutil, PIL, PySide6; print('ok')"
 ```
 
@@ -190,13 +194,13 @@ When the environment is active, your shell prompt usually starts with `(admdyn)`
 To leave the environment later:
 
 ```bash
-deactivate
+conda deactivate
 ```
 
 ## Running the GUI
 
 ```bash
-python3 ADMDynAnlz_launcher.py
+python ADMDynAnlz_launcher.py
 ```
 
 All entrypoints open a launcher window where you select the module you want to use.
