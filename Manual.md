@@ -625,43 +625,210 @@ For a standard coordinate-to-analysis workflow:
 2. Use `Velocities and Dipoles` if you need velocity or dipole workflows.
 3. Use `MSD and NGP / Anisotropic NGP` on the COM outputs.
 4. Use `Correlation Functions` when you already have numeric scalar or vector arrays and want correlation-analysis scripts for them.
-5. Use `Diffusion constant` when you already have saved VACF files and want a VACF-based diffusion estimate.
+5. Use `Diffusion constant` when you already have saved VACF files, MSD files, or both, and want diffusion estimates from either route.
 
 ## Module 5: Diffusion Constant
 
-This module generates scripts for computing diffusion constants from saved velocity autocorrelation-function files.
+This module generates scripts for computing diffusion constants from saved VACF data, saved MSD data, or both.
+
+The module has two independent subsections:
+
+- `D VACF`
+- `D MSD`
+
+Each subsection has its own enable checkbox. At least one must be enabled.
 
 ## Common Parameters
 
-- `Common Terms`: two optional shared replacement fields for `*` and `**` in the VACF path and output file path
+- `Base Directory`: root folder used to resolve relative VACF paths, MSD paths, and the analysis output file path
+- `Number of VACFs`: number of VACF files to use when the resolved VACF input points to multiple files
+- `Common Terms`: two optional shared replacement fields for `*` and `**`
+
+Important behavior:
+
+- `VACF Path`, `MSD Path`, and `Analysis Output File` support `*` and `**`
+- when `VACF Path` resolves to multiple files, the files are sorted and the first `Number of VACFs` files are used
+- when `Analysis Output File` is relative, it is interpreted relative to `Base Directory`
 
 ## Diffusion Constant Parameters
 
+### D VACF
+
 Fields:
 
-- `VACF Path`: single file, directory, or glob pattern for saved VACF files
-- `Saved Frame dt (ps)`: time difference between adjacent saved VACF points
-- `Max Lag / Observation Window (ps)`: maximum integration window in time units
-- `Shift`: the `delta_param` metadata value used when the VACF was generated
-- `Velocity Units`: choose `namd_internal` or `angstrom_per_ps`
-- `VACF Already Normalized`: when unchecked, each VACF is normalized by `VACF[0]` before integration
-- `Temperature (K)`: used for the equipartition-theorem comparison
-- `Molar Mass (g/mol)`: used for the equipartition-theorem comparison
-- `Analysis Output File`: text file that receives the averaged VACF data and summary header
+- `VACF Path`: single file, directory, or glob pattern for the saved VACF data
+- `Time Axis Exist`: tells the software whether the VACF file already contains a time column
+- `Saved Frame dt`: used only when `Time Axis Exist` is unchecked
+- `Time Axis Unit`: currently recorded as input metadata for the user; the actual parsing decision is controlled by `Time Axis Exist`
+- `VACF Already Normalized`: tells the software whether the VACF has already been divided by its `t = 0` value
+- `Velocity Units`: `namd_internal` or `angstrom_per_ps`
+
+How VACF input is interpreted:
+
+- if `Time Axis Exist` is checked:
+  - column 1 is used as time
+  - column 2 is used as VACF
+- if `Time Axis Exist` is unchecked:
+  - the software builds the time axis as `t = (i - 1) * dt`
+  - the VACF is read from the numeric series in the file
+
+How normalization and units are handled:
+
+- if `VACF Already Normalized` is unchecked:
+  - the software reads the VACF as an unnormalized physical VACF
+  - if `Velocity Units = namd_internal`, velocities are converted using the built-in factor before the variance-based diffusion estimate is formed
+  - each VACF is normalized internally by its own `VACF[0]` before integrating `tau`
+  - `VACF var, ang^2/ps^2` is reported in the output
+- if `VACF Already Normalized` is checked:
+  - the software assumes the input is already normalized
+  - the velocity-unit menu is disabled and no unit conversion is applied
+  - the diffusion estimate uses the equipartition variance instead of a measured `VACF[0]`
+  - `VACF var, ang^2/ps^2` is not reported in the results
+
+### D MSD
+
+Fields:
+
+- `MSD Path`: single file path or pattern for the MSD data
+- `Time Axis Exist`: tells the software whether the MSD file already contains a time column
+- `Saved Frame dt`: used only when `Time Axis Exist` is unchecked
+- `Time Axis Unit`: recorded as user metadata
+
+How MSD input is interpreted:
+
+- if `Time Axis Exist` is checked:
+  - column 1 is used as time
+  - column 2 is used as MSD
+- if `Time Axis Exist` is unchecked:
+  - the numeric MSD table is flattened into one MSD series
+  - the time axis is built as `t = (i - 1) * dt`
+  - this matches the current Mathematica-style workflow used in the project
+
+How `D MSD` is calculated:
+
+- the software fits `MSD(t) = a t` through the origin
+- then reports `D = a / 6`
+
+### Shared lower fields
+
+- `Temperature (K)`: used in the equipartition comparison and optional infinite-size correction
+- `Molar Mass (g/mol)`: used in the equipartition comparison
+- `inf. size correction`: enables the optional infinite-size correction
+- `Parameters`: opens the infinite-size correction popup
+- `Analysis Output File`: output text file written by the generated workflow
+
+Temperature handling:
+
+- the temperature field accepts one value or multiple values separated by commas, spaces, or semicolons
+- when multiple temperatures are given, the generated script handles all of them in one Python script
+- if the temperature list exactly matches `Common Term 1` or `Common Term 2`, the workflow does not nest those loops separately
+- instead, each temperature is paired with the corresponding common-term entry
+- in multi-temperature runs, the output files receive a temperature suffix such as `_T300K`
+
+### Infinite size correction parameters
+
+Clicking `Parameters` opens a window titled `Infinite size correction parameters`.
+
+That window contains:
+
+- a warning that the correction is not recommended for non-cubic or strongly non-cubic cells
+- `Averaged Cubic Side Length (Å)`
+- one viscosity field per temperature, for example `η(300K)`, `η(320K)`, and so on
+
+How the correction is used:
+
+- the software first computes the raw diffusion constants
+- then it applies the infinite-size correction separately for each temperature
+- if both `D VACF` and `D MSD` are enabled, the correction is applied to both
 
 ## Output contents
 
-The generated analysis output file includes:
+The output file is plain text. It does not contain a trailing numeric data table.
 
-- diffusion constant
-- velocity relaxation time
-- comparison between `VACF[0]` and the equipartition variance
+Its high-level structure is:
 
-The output data table contains:
+- title line
+- `Inputs:` section
+- `Results:` section
+- optional `Results per VACF file:` and `Average results:` blocks when multiple VACF files are used
+- optional `D with Infinite size correction` section
 
-- `time_ps`
-- averaged normalized VACF
-- averaged input VACF
+### Inputs section
+
+The `Inputs:` section can include:
+
+- `source`
+- `time axis exists`
+- `time axis unit`
+- `VACF timestep, ps`
+- `velocity units`
+- `velocity scale to angstrom/ps`
+- `VACF already normalized`
+- `MSD source`
+- `MSD timestep, ps`
+- `MSD time axis exists`
+- `MSD time axis unit`
+- `D VACF enabled`
+- `D MSD enabled`
+- `T, K`
+- `molar mass, g/mol`
+- `viscosity, cP`
+- `averaged cubic side length, ang`
+
+Some lines appear only when they are relevant to the enabled subsection or correction settings.
+
+### Results section
+
+Possible result lines include:
+
+- `D VACF, ang^2/ps`
+- `D VACF, cm^2/s`
+- `tau, ps`
+- `VACF var, ang^2/ps^2`
+- `equipartition var, ang^2/ps^2`
+- `variance difference, %`
+- `D MSD, ang^2/ps`
+- `D MSD, cm^2/s`
+
+Important details:
+
+- `VACF var, ang^2/ps^2` is written only when the VACF input was not marked as already normalized
+- `equipartition var, ang^2/ps^2` is reported for the VACF route because it is part of the comparison against the measured or inferred variance
+- for a single VACF file, the results section directly reports the final single-file values
+- for multiple VACF files, the file reports:
+  - `Results per VACF file:`
+  - one line per input VACF
+  - `Average results:`
+
+### Multiple VACF files
+
+When multiple VACF files are used:
+
+- each VACF file is processed separately
+- `tau` and `D VACF` are computed separately for each file
+- the final reported `D VACF` and `tau` are the averages over those per-file values
+
+### Infinite size correction output
+
+If the correction is enabled, the output file ends with:
+
+- a blank line
+- `D with Infinite size correction`
+- `D VACF = ...` when the VACF route is enabled
+- `D MSD = ...` when the MSD route is enabled
+
+## Units summary
+
+- `VACF timestep, ps`: picoseconds
+- `MSD timestep, ps`: picoseconds
+- `T, K`: Kelvin
+- `molar mass, g/mol`: grams per mole
+- `Averaged Cubic Side Length (Å)`: angstrom
+- `viscosity, cP`: centipoise
+- `D VACF, ang^2/ps` and `D MSD, ang^2/ps`: angstrom squared per picosecond
+- `D VACF, cm^2/s` and `D MSD, cm^2/s`: centimeters squared per second
+- `tau, ps`: picoseconds
+- `VACF var, ang^2/ps^2` and `equipartition var, ang^2/ps^2`: angstrom squared per picosecond squared
 
 ## Final notes
 

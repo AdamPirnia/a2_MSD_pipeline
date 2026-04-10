@@ -141,13 +141,46 @@ Typical outputs and units:
 - correlation column: product of the units of the two input arrays
 
 ### 5. Diffusion constant
-This module generates workflows for diffusion-constant analysis from saved VACF files.
+This module generates workflows for diffusion-constant analysis from saved VACF data, saved MSD data, or both.
+
+It currently supports:
+
+- a VACF-based route
+- an MSD-based route
+- optional infinite-size correction for both routes
+- multiple temperatures in one generated script
+
+`VACF-based diffusion constant`
+
+<p align="center">
+  <img src="app_images/DvACF.png" alt="VACF-based diffusion constant equation" width="58%">
+</p>
+
+`Velocity relaxation time`
+
+<p align="center">
+  <img src="app_images/tau_v.png" alt="Velocity relaxation time equation" width="66%">
+</p>
+
+`MSD-based diffusion constant`
+
+<p align="center">
+  <img src="app_images/D_MSD.png" alt="MSD-based diffusion constant equation" width="46%">
+</p>
 
 Typical outputs and units:
 
 - velocity relaxation time `tau`: same time unit as the saved VACF spacing input
 - diffusion constant: `A^2/ps` and `cm^2/s`
 - VACF variance comparison: `A^2/ps^2`
+
+Input-handling highlights:
+
+- relative VACF, MSD, and output paths are resolved from `Base Directory`
+- if a time axis exists, the first column is treated as time and the second as data
+- if a time axis does not exist, the module reconstructs time from the saved-frame timestep
+- normalized VACF input disables velocity-unit conversion and uses the equipartition variance for the diffusion estimate
+- if multiple temperatures match one common-term list exactly, temperatures are paired with that common term instead of nested separately
 
 ## What the Software Does
 
