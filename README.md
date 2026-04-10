@@ -7,12 +7,13 @@ ADMDynAnlz is a graphical workflow tool for post-processing molecular dynamics t
 
 The current distributed application is the Qt GUI.
 
-The application currently provides four GUI modules:
+The application currently provides five GUI modules:
 
 - `Coordinates extraction`
 - `Velocities and Dipoles`
 - `MSD and NGP / Anisotropic NGP`
 - `Correlation Functions`
+- `Diffusion constant`
 
 Detailed section-by-section instructions are available in [Manual.md](Manual.md).
 
@@ -121,7 +122,7 @@ Typical outputs and units:
 - directional anisotropy outputs and anisotropy parameter: dimensionless
 
 ### 4. Correlation Functions
-This module generates workflows for time-correlation analysis on numeric data arrays.
+This module generates workflows for time-correlation analysis from numeric data arrays.
 
 It supports:
 
@@ -138,6 +139,15 @@ Typical outputs and units:
 
 - time column: same time unit as `Time per Lag (t1)`
 - correlation column: product of the units of the two input arrays
+
+### 5. Diffusion constant
+This module generates workflows for diffusion-constant analysis from saved VACF files.
+
+Typical outputs and units:
+
+- velocity relaxation time `tau`: same time unit as the saved VACF spacing input
+- diffusion constant: `A^2/ps` and `cm^2/s`
+- VACF variance comparison: `A^2/ps^2`
 
 ## What the Software Does
 

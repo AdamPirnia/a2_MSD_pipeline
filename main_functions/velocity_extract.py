@@ -93,7 +93,7 @@ def _format_missing_file_message(label, path):
 
     return ". ".join(details)
 
-def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None, num_dcd=None, num_particles=None, vmd=None, max_workers=None, dcd_indices=None, common_term="", output_io_spec=None, stride=1):
+def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, grouping_unit="residue", vmd=None, max_workers=None, dcd_indices=None, common_term="", output_io_spec=None, stride=1):
     """
     Extracts center-of-mass velocities from a series of VELDCD trajectories using VMD in parallel,
     by generating per-segment Tcl scripts, running them in batch, and saving
@@ -125,8 +125,10 @@ def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None
     num_dcd : int
         Number of trajectory chunks to process. Generates scripts for
         indices `0` through `num_dcd-1`.
-    num_particles : int
-        Number of molecules/residues to process for COM velocity calculation.
+    target_selection : str
+        VMD atom selection used to choose the atoms included in COM velocity extraction.
+    grouping_unit : str
+        Grouping unit used to build COM velocity particles. One of residue, chain, segname.
     vmd : str
         The path to the VMD executable.
     max_workers : int, optional
@@ -160,7 +162,8 @@ def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None
     ...     veldcd_pattern="trajectories_*/run_{i}/traj.veldcd",
     ...     output_pattern="path/to/velCOM_{i}.dat",
     ...     num_dcd=6,
-    ...     num_particles=500,
+    ...     target_selection="water",
+    ...     grouping_unit="residue",
     ...     vmd="/usr/local/bin/vmd",
     ...     common_term="260"
     ... )
@@ -190,9 +193,15 @@ def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None
     print(f"Output pattern: {output_pattern}")
     print(f"Common term: {common_term}")
     print(f"Number of DCDs: {num_dcd}")
-    print(f"Number of particles: {num_particles}")
+    print(f"Target selection: {target_selection}")
+    print(f"Grouping unit: {grouping_unit}")
     print(f"VMD executable: {vmd}")
     print(f"Stride: {stride}")
+
+    if grouping_unit not in {"residue", "chain", "segname"}:
+        raise ValueError("grouping_unit must be one of: residue, chain, segname")
+    if not str(target_selection or "").strip():
+        raise ValueError("target_selection is required for velocity extraction")
 
     try:
         stride = int(stride)
@@ -271,7 +280,7 @@ def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None
     
     # Generate all TCL scripts first with pattern validation
     for i in dcd_list:
-        success = _write_velocity_tcl_script(i, baseDir, psf_pattern, veldcd_pattern, output_pattern, num_particles, common_term, stride)
+        success = _write_velocity_tcl_script(i, baseDir, psf_pattern, veldcd_pattern, output_pattern, target_selection, grouping_unit, common_term, stride)
         if not success:
             print(f"ERROR: Failed to generate TCL script for chunk {i} due to pattern validation failure.")
             print("Please fix the corrupted patterns in your GUI input fields and try again.")
@@ -349,7 +358,7 @@ def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None
     return results
 
 
-def _write_velocity_tcl_script(i, baseDir, psf_pattern, veldcd_pattern, output_pattern, num_particles, common_term="", stride=1):
+def _write_velocity_tcl_script(i, baseDir, psf_pattern, veldcd_pattern, output_pattern, target_selection, grouping_unit, common_term="", stride=1):
     """Write optimized TCL script for velocity extraction from a single trajectory chunk."""
     
     # Expand patterns to get actual file paths
@@ -483,13 +492,47 @@ if {{$traj == -1}} {{
     exit 1
 }}
 
-# Get number of frames and molecules
+# Get number of frames and COM groups
 set nf [molinfo $traj get numframes]
-set num_mols {num_particles}
 set stride {stride}
 puts "Total frames: $nf"
-puts "Number of molecules: $num_mols"
 puts "Stride: $stride"
+
+set target_selection "{_tcl_quote(target_selection)}"
+set grouping_unit "{_tcl_quote(grouping_unit)}"
+set base_sel [atomselect top $target_selection]
+set selected_atoms [$base_sel num]
+puts "Target selection: $target_selection"
+puts "Grouping unit: $grouping_unit"
+puts "Selected atoms: $selected_atoms"
+
+if {{$selected_atoms == 0}} {{
+    puts "ERROR: No atoms selected with target selection $target_selection"
+    $base_sel delete
+    close $outfile
+    mol delete $traj
+    exit 1
+}}
+
+set group_values [$base_sel get $grouping_unit]
+set ordered_groups [list]
+foreach group_value $group_values {{
+    if {{[lsearch -exact $ordered_groups $group_value] < 0}} {{
+        lappend ordered_groups $group_value
+    }}
+}}
+set num_groups [llength $ordered_groups]
+puts "Resolved $num_groups COM group(s)"
+
+if {{$num_groups <= 0}} {{
+    puts "ERROR: No COM groups were resolved from the selected atoms"
+    $base_sel delete
+    close $outfile
+    mol delete $traj
+    exit 1
+}}
+
+$base_sel delete
 
 # Validate frame count
 if {{$nf <= 0}} {{
@@ -506,8 +549,16 @@ for {{set frame 0}} {{$frame < $nf}} {{incr frame $stride}} {{
     animate goto $frame
     set frameData ""
     
-    for {{set res 0}} {{$res < $num_mols}} {{incr res}} {{
-        set sel [atomselect top "residue $res"]
+    foreach group_value $ordered_groups {{
+        set group_selection "$target_selection and $grouping_unit [list $group_value]"
+        set sel [atomselect top $group_selection]
+        if {{[$sel num] == 0}} {{
+            puts "ERROR: Group selection became empty at frame $frame: $group_selection"
+            $sel delete
+            close $outfile
+            mol delete $traj
+            exit 1
+        }}
         set velcom [measure center $sel weight mass]
         append frameData [format " %.6f %.6f %.6f " [lindex $velcom 0] [lindex $velcom 1] [lindex $velcom 2]]
         $sel delete

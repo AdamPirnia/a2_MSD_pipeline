@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 import os
+import subprocess
+import tempfile
 import warnings
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -74,8 +76,154 @@ def _load_coordinate_array(input_file, dtype=np.float64, io_spec=None):
     return np.asarray(data, dtype=dtype)
 
 
+def _tcl_quote(value):
+    text = str(value)
+    text = text.replace("\\", "\\\\")
+    text = text.replace("\"", "\\\"")
+    text = text.replace("$", "\\$")
+    text = text.replace("[", "\\[")
+    text = text.replace("]", "\\]")
+    text = text.replace("\n", "\\n")
+    text = text.replace("\r", "\\r")
+    return text
+
+
+def _extract_selection_metadata(baseDir, psf_pattern, file_index, target_selection, grouping_unit, vmd_path, common_term=""):
+    """Use VMD's selection engine to resolve atom masses and group membership from the PSF."""
+    if grouping_unit not in {"residue", "chain", "segname"}:
+        raise ValueError(f"Unsupported grouping unit: {grouping_unit}")
+    if not str(vmd_path or "").strip():
+        raise ValueError("VMD path is required for COM metadata extraction")
+    if not str(target_selection or "").strip():
+        raise ValueError("Target selection is required for COM calculation")
+
+    psf_rel = expand_path_pattern(psf_pattern, common_term, file_index)
+    psf_full = os.path.join(baseDir, psf_rel)
+    if not os.path.exists(psf_full):
+        raise FileNotFoundError(f"PSF file not found: {psf_full}")
+
+    script_content = f"""set PSF "{_tcl_quote(psf_full)}"
+set molid [mol new $PSF type psf waitfor all]
+set sel [atomselect $molid "{_tcl_quote(target_selection)}"]
+set groups [$sel get {grouping_unit}]
+set masses [$sel get mass]
+puts "__META_BEGIN__"
+foreach group $groups mass $masses {{
+    puts "ATOM\\t$group\\t$mass"
+}}
+puts "__META_END__"
+$sel delete
+mol delete $molid
+quit
+"""
+
+    script_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".tcl", delete=False) as handle:
+            handle.write(script_content)
+            script_path = handle.name
+
+        process = subprocess.run(
+            [vmd_path, "-dispdev", "text", "-nt", "1", "-e", script_path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        if script_path and os.path.exists(script_path):
+            os.unlink(script_path)
+
+    if process.returncode != 0:
+        raise RuntimeError(
+            "VMD failed while extracting COM metadata from the PSF.\n"
+            f"STDOUT:\n{process.stdout}\nSTDERR:\n{process.stderr}"
+        )
+
+    lines = process.stdout.splitlines()
+    try:
+        start = lines.index("__META_BEGIN__") + 1
+        end = lines.index("__META_END__")
+    except ValueError as exc:
+        raise RuntimeError(
+            "Could not find COM metadata markers in VMD output.\n"
+            f"STDOUT:\n{process.stdout}\nSTDERR:\n{process.stderr}"
+        ) from exc
+
+    atom_groups = []
+    atom_masses = []
+    for line in lines[start:end]:
+        if not line.startswith("ATOM\t"):
+            continue
+        _tag, group_value, mass_value = line.split("\t", 2)
+        atom_groups.append(str(group_value))
+        atom_masses.append(float(mass_value))
+
+    if not atom_groups:
+        raise ValueError(
+            "The COM target selection did not resolve to any atoms. "
+            "Check the PSF pattern and target selection."
+        )
+
+    group_labels = []
+    group_lookup = {}
+    group_indices = []
+    for group_value in atom_groups:
+        if group_value not in group_lookup:
+            group_lookup[group_value] = len(group_labels)
+            group_labels.append(group_value)
+        group_indices.append(group_lookup[group_value])
+
+    return {
+        "atom_count": len(atom_groups),
+        "atom_masses": np.asarray(atom_masses, dtype=np.float64),
+        "group_indices": np.asarray(group_indices, dtype=np.int32),
+        "group_labels": group_labels,
+        "psf_path": psf_full,
+    }
+
+
+def _prepare_com_metadata(metadata, calc_mode):
+    atom_masses = np.asarray(metadata["atom_masses"], dtype=np.float64)
+    atom_mask = atom_masses != 0.0
+    if not np.any(atom_mask):
+        raise ValueError("Selected atoms do not contain any nonzero masses")
+
+    if calc_mode == "collective":
+        effective_group_indices = np.zeros(int(np.count_nonzero(atom_mask)), dtype=np.int32)
+        group_labels = ["collective"]
+    else:
+        original_group_indices = np.asarray(metadata["group_indices"], dtype=np.int32)[atom_mask]
+        original_group_labels = list(metadata["group_labels"])
+        unique_indices = []
+        seen = set()
+        for index in original_group_indices:
+            index_value = int(index)
+            if index_value not in seen:
+                seen.add(index_value)
+                unique_indices.append(index_value)
+        remap = {old_index: new_index for new_index, old_index in enumerate(unique_indices)}
+        effective_group_indices = np.asarray([remap[int(index)] for index in original_group_indices], dtype=np.int32)
+        group_labels = [original_group_labels[index] for index in unique_indices]
+
+    effective_masses = atom_masses[atom_mask]
+    group_masses = np.zeros(len(group_labels), dtype=np.float64)
+    for group_index, mass in zip(effective_group_indices, effective_masses):
+        group_masses[int(group_index)] += float(mass)
+    if np.any(group_masses <= 0.0):
+        raise ValueError("At least one inferred COM group has non-positive total mass")
+
+    return {
+        "atom_count": int(metadata["atom_count"]),
+        "atom_mask": atom_mask,
+        "effective_masses": effective_masses,
+        "group_indices": effective_group_indices,
+        "group_labels": group_labels,
+        "group_masses": group_masses,
+    }
+
+
 def _prepare_mass_configuration(particl_mass, prtcl_atoms):
-    """Return the nonzero-mass atom mask and masses used in COM calculations."""
+    """Compatibility helper for legacy fixed-size COM workflows."""
     if len(particl_mass) != prtcl_atoms:
         raise ValueError(f"Mass list length ({len(particl_mass)}) must match atoms per particle ({prtcl_atoms})")
 
@@ -92,36 +240,16 @@ def _prepare_mass_configuration(particl_mass, prtcl_atoms):
 
     return atom_mask, effective_masses, total_mass
 
-
-def _resolve_usable_particle_count(prtcl_num, prtcl_atoms, n_cols):
-    """Return the number of complete particles that can be processed from a row width."""
-    cols_per_particle = prtcl_atoms * 3
-    if cols_per_particle <= 0:
-        raise ValueError("Atoms per particle must be positive")
-
-    available_particles = n_cols // cols_per_particle
-    if available_particles <= 0:
-        raise ValueError(
-            f"Input data has only {n_cols} columns; at least {cols_per_particle} are required for one particle"
-        )
-
-    usable_particles = available_particles if prtcl_num is None else min(int(prtcl_num), available_particles)
-    if usable_particles <= 0:
-        raise ValueError("No complete particles are available for COM calculation")
-
-    return usable_particles
-
 ######################################################    Parameters    
 
-def coms(baseDir, input_pattern, output_pattern, num_dcd, prtcl_num, prtcl_atoms, particl_mass, max_workers=None, use_memmap=False, dcd_indices=None, common_term="", input_io_spec=None, output_io_spec=None):
+def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, target_selection=None, vmd_path=None, calc_mode="individual", grouping_unit="residue", max_workers=None, use_memmap=False, dcd_indices=None, common_term="", input_io_spec=None, output_io_spec=None, prtcl_num=None, prtcl_atoms=None, particl_mass=None):
     """
-    Compute and save the per-frame center-of-mass coordinates for each molecule
-    from unwrapped trajectory snapshots with optimized memory usage and 
-    optional parallel processing.
+    Compute and save per-frame center-of-mass coordinates from extracted atomic coordinates.
 
-    Reads in `num_dcd` files of XYZ coordinates using the input pattern,
-    computes each molecule's center of mass, and writes the results using
-    the output pattern.
+    The current workflow infers atom masses and group membership from the PSF plus
+    VMD atom selection text, so heterogeneous groups with different atom counts are
+    supported. Individual mode returns one COM per selected group, while collective
+    mode returns exactly one COM per frame.
 
     Parameters
     ----------
@@ -135,13 +263,16 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, prtcl_num, prtcl_atoms
         Example: "anlz/NVT_*/com_data/com_{i}.dat"
     num_dcd : int
         Number of trajectory frames (i.e., number of input files to process).
-    prtcl_num : int
-        Number of molecules per frame.
-    prtcl_atoms : int
-        Number of atoms in each molecule.
-    particl_mass : list of float
-        Atomic masses for the `prtcl_atoms` atoms in a single molecule,
-        in the same order as the coordinates appear in the input files.
+    psf_pattern : str
+        Path pattern for PSF files used to infer masses and group membership.
+    target_selection : str
+        VMD atom selection used to choose atoms from the PSF.
+    vmd_path : str
+        Full path to the VMD executable.
+    calc_mode : str
+        Either "individual" or "collective".
+    grouping_unit : str
+        Grouping unit for individual COM calculation. One of residue, chain, segname.
     max_workers : int, optional
         Maximum number of parallel workers. Defaults to min(num_dcd, CPU count).
     use_memmap : bool, optional
@@ -166,27 +297,10 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, prtcl_num, prtcl_atoms
 
     Notes
     -----
-    - Input files must be whitespace-delimited XYZ snapshots, with each line
-      giving one atom's x,y,z in sequence.  The total number of lines per file
-      must equal `prtcl_num * prtcl_atoms`.
-    - Output files are whitespace-delimited, with each row corresponding to one
-      molecule's (x, y, z) center of mass.
+    - Input files must store the selected atoms in the same order used by the VMD
+      selection on the PSF. Step 1 coordinate extraction already preserves that order.
+    - In collective mode the output shape is (frames, 3).
     - For very large systems, consider using use_memmap=True to reduce memory usage.
-
-    Example
-    -------
-    >>> results = coms(
-    ...     baseDir="/home/user/sim",
-    ...     input_pattern="anlz/NVT_*/unwrapped/unwrapped_xyz_{i}.dat",
-    ...     output_pattern="anlz/NVT_*/com_data/com_{i}.dat",
-    ...     num_dcd=1000,
-    ...     prtcl_num=500,
-    ...     prtcl_atoms=3,
-    ...     particl_mass=[16.00, 1.008, 1.008],  # e.g. water: O, H, H
-    ...     max_workers=4,
-    ...     use_memmap=True,
-    ...     common_term="240"
-    ... )
     """
     warnings.simplefilter(action='ignore', category=FutureWarning)
     
@@ -209,14 +323,11 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, prtcl_num, prtcl_atoms
     print(f"Output pattern: {output_pattern}")
     print(f"Common term: {common_term}")
     print(f"Number of DCDs: {num_dcd}")
-    molecule_count = "inferred per file" if prtcl_num is None else prtcl_num
-    print(f"Molecules: {molecule_count}, Atoms per molecule: {prtcl_atoms}")
-    print(f"Masses: {particl_mass}")
-    
-    atom_mask, effective_masses, total_mass = _prepare_mass_configuration(particl_mass, prtcl_atoms)
-    ignored_atoms = prtcl_atoms - int(np.count_nonzero(atom_mask))
-    if ignored_atoms:
-        print(f"Ignoring {ignored_atoms} zero-mass atom(s) per molecule during COM calculation")
+    print(f"Calculation mode: {calc_mode}")
+    if calc_mode == "individual":
+        print(f"Grouping unit: {grouping_unit}")
+    print(f"PSF pattern: {psf_pattern}")
+    print(f"Target selection: {target_selection}")
     
     # Determine which DCDs to process
     if dcd_indices is None:
@@ -224,6 +335,8 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, prtcl_num, prtcl_atoms
     else:
         dcd_list = dcd_indices
         print(f"Processing selected DCDs: {dcd_list}")
+    if not dcd_list:
+        raise ValueError("No DCD indices were selected for COM calculation")
     
     # Create output directory for first file (to ensure it exists)
     if dcd_list:
@@ -245,7 +358,23 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, prtcl_num, prtcl_atoms
         if not os.path.exists(first_input_path):
             raise FileNotFoundError(f"First input file not found: {first_input_path}")
         print(f"✓ Input files validated for index {dcd_list[0]}")
-    
+
+    metadata = _extract_selection_metadata(
+        baseDir,
+        psf_pattern,
+        dcd_list[0],
+        target_selection,
+        grouping_unit,
+        vmd_path,
+        common_term,
+    )
+    com_metadata = _prepare_com_metadata(metadata, calc_mode)
+    ignored_atoms = metadata["atom_count"] - int(np.count_nonzero(com_metadata["atom_mask"]))
+    print(f"Resolved {metadata['atom_count']} atom(s) from PSF selection {metadata['psf_path']}")
+    print(f"Resolved {len(com_metadata['group_labels'])} COM group(s)")
+    if ignored_atoms:
+        print(f"Ignoring {ignored_atoms} zero-mass atom(s) from the selected atoms during COM calculation")
+
     results = {
         'success': 0,
         'failed': [],
@@ -261,8 +390,8 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, prtcl_num, prtcl_atoms
         for i in dcd_list:
             try:
                 _compute_com_single_file(
-                    i, baseDir, input_pattern, output_pattern, prtcl_num, prtcl_atoms,
-                    atom_mask, effective_masses, total_mass, use_memmap, common_term, input_io_spec, output_io_spec
+                    i, baseDir, input_pattern, output_pattern, com_metadata,
+                    use_memmap, common_term, input_io_spec, output_io_spec
                 )
                 results['success'] += 1
                 if i % 10 == 0 or i == len(dcd_list) - 1:
@@ -277,8 +406,8 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, prtcl_num, prtcl_atoms
             future_to_index = {
                 executor.submit(
                     _compute_com_single_file,
-                    i, baseDir, input_pattern, output_pattern, prtcl_num, prtcl_atoms,
-                    atom_mask, effective_masses, total_mass, use_memmap, common_term, input_io_spec, output_io_spec
+                    i, baseDir, input_pattern, output_pattern, com_metadata,
+                    use_memmap, common_term, input_io_spec, output_io_spec
                 ): i 
                 for i in dcd_list
             }
@@ -315,7 +444,7 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, prtcl_num, prtcl_atoms
     # Validate output shapes for COM calculation
     if results['success'] > 0:
         print(f"Validating COM output file shapes...")
-        expected_columns = None if prtcl_num is None else prtcl_num * 3
+        expected_columns = len(com_metadata["group_labels"]) * 3
         _validate_com_shapes(
             baseDir,
             output_pattern,
@@ -367,7 +496,7 @@ def _validate_com_shapes(baseDir, output_pattern, sample_indices, expected_colum
             print(result)
 
 
-def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern, prtcl_num, prtcl_atoms, atom_mask, effective_masses, total_mass, use_memmap, common_term="", input_io_spec=None, output_io_spec=None):
+def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern, com_metadata, use_memmap, common_term="", input_io_spec=None, output_io_spec=None):
     """Compute center-of-mass for a single trajectory file with optimized memory usage."""
     
     # Expand patterns to get actual file paths
@@ -389,18 +518,25 @@ def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern,
             # Standard loading
             data = _load_coordinate_array(input_file, dtype=np.float64, io_spec=input_io_spec)
         
-        n_frames = data.shape[0]
-        usable_particles = _resolve_usable_particle_count(prtcl_num, prtcl_atoms, data.shape[1])
-        usable_cols = usable_particles * prtcl_atoms * 3
-        if data.shape[1] != usable_cols:
-            print(f"Trimming {input_file_rel} from {data.shape[1]} to {usable_cols} columns ({usable_particles} particles)")
-            data = data[:, :usable_cols]
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
 
-        # Reshape data: (frames, molecules, atoms_per_molecule*3)
-        data_reshaped = data.reshape(n_frames, usable_particles, prtcl_atoms * 3)
-        
-        # Compute center-of-mass using optimized vectorized operations
-        centers_of_mass = _compute_com_vectorized(data_reshaped, atom_mask, effective_masses, total_mass, prtcl_atoms)
+        n_frames = data.shape[0]
+        expected_cols = com_metadata["atom_count"] * 3
+        if int(data.shape[1]) != expected_cols:
+            raise ValueError(
+                f"Coordinate input has {data.shape[1]} columns, but COM calculation requires "
+                f"{expected_cols} columns for {com_metadata['atom_count']} selected atoms."
+            )
+
+        atom_coords = data.reshape(n_frames, com_metadata["atom_count"], 3)
+        centers_of_mass = _compute_com_vectorized(
+            atom_coords,
+            com_metadata["atom_mask"],
+            com_metadata["effective_masses"],
+            com_metadata["group_indices"],
+            com_metadata["group_masses"],
+        )
         
         # Flatten for output: (frames, molecules*3)
         centers_of_mass_flat = centers_of_mass.reshape(n_frames, -1)
@@ -421,40 +557,33 @@ def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern,
         raise RuntimeError(f"Error processing file {input_file}: {e}")
 
 
-def _compute_com_vectorized(data, atom_mask, effective_masses, total_mass, prtcl_atoms):
+def _compute_com_vectorized(data, atom_mask, effective_masses, group_indices, group_masses):
     """
     Compute center-of-mass using highly optimized vectorized operations.
     
     Parameters
     ----------
-    data : ndarray, shape (n_frames, n_molecules, atoms_per_molecule*3)
-        Coordinate data with x,y,z for each atom flattened.
-    masses : ndarray, shape (atoms_per_molecule,)
-        Atomic masses.
-    total_mass : float
-        Sum of all atomic masses in a molecule.
-    prtcl_atoms : int
-        Number of atoms per molecule.
+    data : ndarray, shape (n_frames, n_atoms, 3)
+        Coordinate data for the selected atoms.
     
     Returns
     -------
-    com : ndarray, shape (n_frames, n_molecules, 3)
+    com : ndarray, shape (n_frames, n_groups, 3)
         Center-of-mass coordinates.
     """
-    n_frames, n_molecules, _ = data.shape
-    
-    # Reshape to separate x, y, z coordinates: (frames, molecules, atoms, 3)
-    coords = data.reshape(n_frames, n_molecules, prtcl_atoms, 3)
-    coords = coords[:, :, atom_mask, :]
-    
-    # Broadcast masses for vectorized multiplication: (1, 1, atoms, 1)
-    masses_broadcast = effective_masses.reshape(1, 1, -1, 1)
-    
-    # Compute weighted coordinates and sum over atoms
-    # Result shape: (frames, molecules, 3)
-    com = np.sum(coords * masses_broadcast, axis=2) / total_mass
-    
-    return com
+    coords = data[:, atom_mask, :]
+    masses_broadcast = effective_masses.reshape(1, -1, 1)
+    weighted_coords = coords * masses_broadcast
+    num_groups = int(len(group_masses))
+    centers = np.zeros((coords.shape[0], num_groups, 3), dtype=np.float64)
+
+    for group_index in range(num_groups):
+        group_mask = group_indices == group_index
+        if not np.any(group_mask):
+            raise ValueError(f"COM group {group_index} does not contain any atoms")
+        centers[:, group_index, :] = np.sum(weighted_coords[:, group_mask, :], axis=1) / float(group_masses[group_index])
+
+    return centers
 
 
 def _compute_com_single_file_optimized(file_index, baseDir, coor_pattern, com_pattern, prtcl_num, prtcl_atoms, atom_mask, effective_masses, total_mass, use_memmap, chunk_size=None):

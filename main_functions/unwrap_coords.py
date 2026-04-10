@@ -102,7 +102,7 @@ def _resolve_usable_atom_count(num_atoms, n_cols):
     return usable_atoms
 
     
-def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None, num_dcd=None, num_atoms=None, interval=slice(None), stride=1, max_workers=None, chunk_size=None, dcd_indices=None, common_term="", input_io_spec=None, output_io_spec=None):
+def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None, num_dcd=None, max_workers=None, chunk_size=None, dcd_indices=None, common_term="", input_io_spec=None, output_io_spec=None):
     """
     Read a series of coordinates directly extracted from MD trajectories, unwrap 
     periodic boundary crossings, and write out unwrapped coordinate files with
@@ -134,14 +134,6 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
         Example: "anlz/NVT_*/restart_equil.xsc" (if same for all) or "anlz/NVT_*/restart_{i}.xsc"
     num_dcd : int
         Number of frames to process (i.e. number of input files).
-    num_atoms : int
-        Number of all atoms for which α₂(t) is calculated. Each input file 
-        is expected to have `num_atoms*3` columns when flattened.
-    interval : slice function, optional
-        Slices the time length of the trajectory to be analyzed.
-    stride : int, optional
-        Frame stride for processing. Use 1 to process every frame, 2 to process
-        every other frame, etc.
     max_workers : int, optional
         Maximum number of parallel workers for processing files. 
         Defaults to min(num_dcd, CPU count) for parallel processing, 
@@ -177,7 +169,6 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
     ...     output_pattern="anlz/NVT_*/unwrapped/unwrapped_xyz_{i}.dat",
     ...     xsc_pattern="anlz/NVT_*/restart_equil.xsc",
     ...     num_dcd=6,
-    ...     num_atoms=3000,
     ...     common_term="240"
     ... )
     """
@@ -206,15 +197,6 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
     print(f"XSC pattern: {xsc_pattern}")
     print(f"Common term: {common_term}")
     print(f"Number of DCDs: {num_dcd}")
-    print(f"Number of atoms: {num_atoms}")
-    print(f"Stride: {stride}")
-
-    try:
-        stride = int(stride)
-    except (TypeError, ValueError):
-        raise ValueError("stride must be an integer")
-    if stride < 1:
-        raise ValueError("stride must be >= 1")
     
     # Determine indices to process
     if dcd_indices is None:
@@ -257,7 +239,7 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
     
     # Determine optimal chunk size for memory efficiency
     if chunk_size is None:
-        chunk_size = 1000 if num_atoms is None else min(1000, num_atoms)
+        chunk_size = 1000
     
     # Processing setup
     if max_workers is None:
@@ -265,13 +247,8 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
     
     print(f"Using {max_workers} workers, chunk size: {chunk_size}")
     
-    # Calculate expected output shape for validation
-    # Expected output: (F, M*N*3) where F=frames, M=molecules, N=atoms per molecule
-    expected_columns = None if num_atoms is None else num_atoms * 3
-    if expected_columns is None:
-        print("Expected output shape: inferred per file from available xyz triplets")
-    else:
-        print(f"Expected output shape: (frames, up to {expected_columns}) for {num_atoms} atoms")
+    expected_columns = None
+    print("Expected output shape: inferred from Step 1 coordinate output width")
     
     results = {'success': 0, 'failed': [], 'total_time': 0}
     
@@ -280,8 +257,8 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
         for i in dcd_list:
             try:
                 _unwrap_single_file(
-                    i, baseDir, input_pattern, output_pattern, xsc_pattern, num_atoms, 
-                    box_size, interval, stride, chunk_size, common_term, input_io_spec, output_io_spec
+                    i, baseDir, input_pattern, output_pattern, xsc_pattern,
+                    box_size, chunk_size, common_term, input_io_spec, output_io_spec
                 )
                 results['success'] += 1
                 print(f"✓ Completed file {i}")
@@ -295,8 +272,8 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
             future_to_index = {
                 executor.submit(
                     _unwrap_single_file, 
-                    i, baseDir, input_pattern, output_pattern, xsc_pattern, num_atoms,
-                    box_size, interval, stride, chunk_size, common_term, input_io_spec, output_io_spec
+                    i, baseDir, input_pattern, output_pattern, xsc_pattern,
+                    box_size, chunk_size, common_term, input_io_spec, output_io_spec
                 ): i 
                 for i in dcd_list
             }
@@ -366,8 +343,8 @@ def _validate_unwrapped_shapes(baseDir, output_pattern, sample_indices, expected
             print(result)
 
 
-def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_pattern, num_atoms, 
-                       box_size, interval, stride, chunk_size, common_term, input_io_spec=None, output_io_spec=None):
+def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_pattern,
+                       box_size, chunk_size, common_term, input_io_spec=None, output_io_spec=None):
     """Process a single coordinate file with vectorized unwrapping algorithm."""
     
     input_file_rel = expand_path_pattern(input_pattern, common_term, file_index)
@@ -384,14 +361,12 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
         print(f"Processing {input_file}...")
         coords = _load_coordinate_array(input_file, dtype=np.float32, io_spec=input_io_spec)
         
-        # Apply interval slicing first, then stride to match the generated pipeline order.
-        coords = coords[interval]
-        if stride > 1:
-            coords = coords[::stride]
+        if coords.ndim == 1:
+            coords = coords.reshape(1, -1)
         n_frames, n_cols = coords.shape
         
         # Validate dimensions
-        usable_atoms = _resolve_usable_atom_count(num_atoms, n_cols)
+        usable_atoms = _resolve_usable_atom_count(None, n_cols)
         usable_cols = usable_atoms * 3
         if n_cols != usable_cols:
             print(f"Trimming {input_file_rel} from {n_cols} to {usable_cols} columns ({usable_atoms} atoms)")

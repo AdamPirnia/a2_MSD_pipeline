@@ -625,6 +625,43 @@ For a standard coordinate-to-analysis workflow:
 2. Use `Velocities and Dipoles` if you need velocity or dipole workflows.
 3. Use `MSD and NGP / Anisotropic NGP` on the COM outputs.
 4. Use `Correlation Functions` when you already have numeric scalar or vector arrays and want correlation-analysis scripts for them.
+5. Use `Diffusion constant` when you already have saved VACF files and want a VACF-based diffusion estimate.
+
+## Module 5: Diffusion Constant
+
+This module generates scripts for computing diffusion constants from saved velocity autocorrelation-function files.
+
+## Common Parameters
+
+- `Common Terms`: two optional shared replacement fields for `*` and `**` in the VACF path and output file path
+
+## Diffusion Constant Parameters
+
+Fields:
+
+- `VACF Path`: single file, directory, or glob pattern for saved VACF files
+- `Saved Frame dt (ps)`: time difference between adjacent saved VACF points
+- `Max Lag / Observation Window (ps)`: maximum integration window in time units
+- `Shift`: the `delta_param` metadata value used when the VACF was generated
+- `Velocity Units`: choose `namd_internal` or `angstrom_per_ps`
+- `VACF Already Normalized`: when unchecked, each VACF is normalized by `VACF[0]` before integration
+- `Temperature (K)`: used for the equipartition-theorem comparison
+- `Molar Mass (g/mol)`: used for the equipartition-theorem comparison
+- `Analysis Output File`: text file that receives the averaged VACF data and summary header
+
+## Output contents
+
+The generated analysis output file includes:
+
+- diffusion constant
+- velocity relaxation time
+- comparison between `VACF[0]` and the equipartition variance
+
+The output data table contains:
+
+- `time_ps`
+- averaged normalized VACF
+- averaged input VACF
 
 ## Final notes
 
