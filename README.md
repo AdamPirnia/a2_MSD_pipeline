@@ -296,14 +296,14 @@ Unblock-File .\ADMDynAnlz_Windows.exe
 
 This public repository contains the GUI application and user-facing project files needed to run or package the software.
 
-Large Linux binaries may be distributed as GitHub release assets rather than regular repository files.
+Platform executables may be distributed as GitHub release assets rather than regular repository files.
 
 For maintainers updating the Linux build:
 
-- the Linux executable is published as a GitHub release asset rather than being committed into repository history
+- executables are published as GitHub release assets rather than being committed into repository history
 - this avoids rapid repository bloat from repeated large binary updates
 
-To publish the Linux executable as a release asset, authentication can be provided by:
+To publish executables as release assets, authentication can be provided by:
 
 - `PUBLIC_REPO_TOKEN`
 - `GITHUB_TOKEN`
