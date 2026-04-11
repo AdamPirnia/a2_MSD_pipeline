@@ -17,6 +17,185 @@ The application currently provides five GUI modules:
 
 Detailed section-by-section instructions are available in [Manual.md](Manual.md).
 
+## What the Software Does
+
+ADMDynAnlz is designed to help users:
+
+- preprocess large molecular dynamics trajectories
+- organize analysis inputs through a GUI instead of manual script editing
+- generate execution-ready analysis scripts
+- prepare local or cluster-oriented workflows, including SLURM job files when needed
+
+## Requirements
+
+- Python 3.10 or newer
+- Python 3.12 recommended
+- `numpy`
+- VMD for trajectory-based extraction steps
+
+For any `VMD Path` field, enter the actual VMD executable path or an actual runnable launcher command. Do not rely on shell aliases.
+
+Platform notes:
+
+- macOS: use the real executable or launcher path from the VMD application bundle, not an alias such as `vmd` defined only in your interactive shell
+- Windows: use the real `vmd.exe` path, not a desktop shortcut or a shell-only wrapper command
+
+Generic examples:
+
+- macOS: `/Applications/VMD ... .app/Contents/MacOS/...`
+- Windows: `C:\Program Files\VMD\...\vmd.exe`
+
+## How and what to download
+
+You need to download two different things from this project:
+
+- the repository source code, if you want the scripts, documentation, and editable project files
+- a prebuilt executable from the GitHub Releases page, if you only want to run the GUI application
+
+Choose the executable that matches your system:
+
+- Linux: `ADMDynAnlz_Linux`
+- macOS Apple Silicon: `ADMDynAnlz_mac_arm64`
+- macOS Intel: `ADMDynAnlz_mac_x86_64`
+- Windows: `ADMDynAnlz_Windows.exe`
+
+Repository page:
+
+- `https://github.com/adampirnia/a2_MSD_source`
+
+Releases page:
+
+- `https://github.com/adampirnia/a2_MSD_source/releases`
+
+### Web browser
+
+To download the repository source code in a browser:
+
+1. Open `https://github.com/adampirnia/a2_MSD_source`
+2. Click `Code`
+3. Choose either:
+   - `Download ZIP` to download the repository as an archive
+   - the repository URL if you only want to copy the clone link for later use
+
+To download a prebuilt executable in a browser:
+
+1. Open `https://github.com/adampirnia/a2_MSD_source/releases`
+2. Open the latest release, or another release if you need a specific version
+3. In the `Assets` section, download the file for your operating system
+
+### Command line
+
+To download the repository source code with Git:
+
+```bash
+git clone https://github.com/adampirnia/a2_MSD_source.git
+cd a2_MSD_source
+```
+
+If you prefer GitHub CLI, you can also clone with:
+
+```bash
+gh repo clone adampirnia/a2_MSD_source
+cd a2_MSD_source
+```
+
+To download a release executable with GitHub CLI:
+
+```bash
+gh release download --repo adampirnia/a2_MSD_source --pattern "ADMDynAnlz_Linux"
+```
+
+Replace `ADMDynAnlz_Linux` with the file you actually want:
+
+- `ADMDynAnlz_mac_arm64`
+- `ADMDynAnlz_mac_x86_64`
+- `ADMDynAnlz_Windows.exe`
+
+If you do not use GitHub CLI, you can download directly with `curl`. Replace `TAG_NAME` with the release tag you want, such as `v1.0.0`, and replace the filename with the correct asset name:
+
+```bash
+curl -LO https://github.com/adampirnia/a2_MSD_source/releases/download/TAG_NAME/ADMDynAnlz_Linux
+```
+
+Equivalent `wget` example:
+
+```bash
+wget https://github.com/adampirnia/a2_MSD_source/releases/download/TAG_NAME/ADMDynAnlz_Linux
+```
+
+## Python Environment Setup
+
+ADMDynAnlz now uses Python features that require Python 3.10 or newer. The recommended setup is a Conda environment named `admdyn` with Python 3.12 so you do not need to change your system-default Python.
+
+### macOS and Linux
+
+If you do not already have Conda installed, install Miniconda or Anaconda first. Then create and activate the environment:
+
+```bash
+conda create -n admdyn python=3.12
+conda activate admdyn
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install numpy pandas psutil Pillow PySide6 pyinstaller scipy matplotlib
+```
+
+Optional verification:
+
+```bash
+python --version
+python -c "import numpy, pandas, psutil, PIL, PySide6; print('ok')"
+```
+
+When the environment is active, your shell prompt usually starts with `(admdyn)`.
+
+To leave the environment later:
+
+```bash
+conda deactivate
+```
+
+## Running Downloaded Executables
+
+### Linux
+
+If needed, make the executable runnable and launch it from a terminal:
+
+```bash
+chmod +x ADMDynAnlz_Linux
+./ADMDynAnlz_Linux
+```
+
+On Linux, double-click launching can also work when the file is marked as executable and the desktop environment allows launching executable files directly.
+
+### macOS Apple Silicon
+
+If you downloaded the Apple Silicon build, run:
+
+```bash
+chmod +x ADMDynAnlz_mac_arm64
+xattr -d com.apple.quarantine ADMDynAnlz_mac_arm64 2>/dev/null || true
+./ADMDynAnlz_mac_arm64
+```
+
+### macOS Intel
+
+If you downloaded the Intel build, run:
+
+```bash
+chmod +x ADMDynAnlz_mac_x86_64
+xattr -d com.apple.quarantine ADMDynAnlz_mac_x86_64 2>/dev/null || true
+./ADMDynAnlz_mac_x86_64
+```
+
+### Windows
+
+In most cases you can run the Windows executable directly. If Windows marks the file as downloaded from the internet, open PowerShell in the download folder and run:
+
+```powershell
+Unblock-File .\ADMDynAnlz_Windows.exe
+.\ADMDynAnlz_Windows.exe
+```
+
+
 ## Interface Overview
 
 ### Module selection
@@ -106,7 +285,7 @@ Typical outputs and units:
 - individual dipole vectors: Debye
 - individual dipole magnitudes: Debye
 - collective dipole magnitude: Debye
-- collective dipole vector components: same dipole unit returned by VMD for the collective vector output
+- collective dipole vector components: VMD internal dipole units (Debye or e·Å)
 
 ### 3. MSD and NGP / Anisotropic NGP
 This module generates workflows for:
@@ -153,19 +332,28 @@ It currently supports:
 `VACF-based diffusion constant`
 
 <p align="center">
-  <img src="app_images/DvACF.png" alt="VACF-based diffusion constant equation" width="58%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app_images/DvACF_dark.png">
+    <img src="app_images/DvACF.png" alt="VACF-based diffusion constant equation" width="58%">
+  </picture>
 </p>
 
 `Velocity relaxation time`
 
 <p align="center">
-  <img src="app_images/tau_v.png" alt="Velocity relaxation time equation" width="66%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app_images/tau_v_dark.png">
+    <img src="app_images/tau_v.png" alt="Velocity relaxation time equation" width="66%">
+  </picture>
 </p>
 
 `MSD-based diffusion constant`
 
 <p align="center">
-  <img src="app_images/D_MSD.png" alt="MSD-based diffusion constant equation" width="46%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app_images/D_MSD_dark.png">
+    <img src="app_images/D_MSD.png" alt="MSD-based diffusion constant equation" width="46%">
+  </picture>
 </p>
 
 Typical outputs and units:
@@ -182,148 +370,6 @@ Input-handling highlights:
 - normalized VACF input disables velocity-unit conversion and uses the equipartition variance for the diffusion estimate
 - if multiple temperatures match one common-term list exactly, temperatures are paired with that common term instead of nested separately
 
-## What the Software Does
-
-ADMDynAnlz is designed to help users:
-
-- preprocess large molecular dynamics trajectories
-- organize analysis inputs through a GUI instead of manual script editing
-- generate execution-ready analysis scripts
-- prepare local or cluster-oriented workflows, including SLURM job files when needed
-
-## Requirements
-
-- Python 3.10 or newer
-- Python 3.12 recommended
-- `numpy`
-- VMD for trajectory-based extraction steps
-
-For any `VMD Path` field, enter the actual VMD executable path or an actual runnable launcher command. Do not rely on shell aliases.
-
-Platform notes:
-
-- macOS: use the real executable or launcher path from the VMD application bundle, not an alias such as `vmd` defined only in your interactive shell
-- Windows: use the real `vmd.exe` path, not a desktop shortcut or a shell-only wrapper command
-
-Generic examples:
-
-- macOS: `/Applications/VMD ... .app/Contents/MacOS/...`
-- Windows: `C:\Program Files\VMD\...\vmd.exe`
-
-## Python Environment Setup
-
-ADMDynAnlz now uses Python features that require Python 3.10 or newer. The recommended setup is a Conda environment named `admdyn` with Python 3.12 so you do not need to change your system-default Python.
-
-### macOS and Linux
-
-If you do not already have Conda installed, install Miniconda or Anaconda first. Then create and activate the environment:
-
-```bash
-conda create -n admdyn python=3.12
-conda activate admdyn
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install numpy pandas psutil Pillow PySide6 pyinstaller scipy matplotlib
-```
-
-Optional verification:
-
-```bash
-python --version
-python -c "import numpy, pandas, psutil, PIL, PySide6; print('ok')"
-```
-
-When the environment is active, your shell prompt usually starts with `(admdyn)`.
-
-To leave the environment later:
-
-```bash
-conda deactivate
-```
-
-## Running the GUI
-
-```bash
-python ADMDynAnlz_launcher.py
-```
-
-All entrypoints open a launcher window where you select the module you want to use.
-
-If a generated workflow cannot find VMD even though `vmd` works in your terminal, the most common reason is that your shell is using an alias or wrapper that the generated scripts cannot see. In that case, enter the actual VMD executable path in the GUI instead.
-
-## Running Downloaded Executables
-
-### Linux
-
-If needed, make the executable runnable and launch it from a terminal:
-
-```bash
-chmod +x ADMDynAnlz_Linux
-./ADMDynAnlz_Linux
-```
-
-On Linux, double-click launching can also work when the file is marked as executable and the desktop environment allows launching executable files directly.
-
-### macOS Apple Silicon
-
-If you downloaded the Apple Silicon build, run:
-
-```bash
-chmod +x ADMDynAnlz_mac_arm64
-xattr -d com.apple.quarantine ADMDynAnlz_mac_arm64 2>/dev/null || true
-./ADMDynAnlz_mac_arm64
-```
-
-### macOS Intel
-
-If you downloaded the Intel build, run:
-
-```bash
-chmod +x ADMDynAnlz_mac_x86_64
-xattr -d com.apple.quarantine ADMDynAnlz_mac_x86_64 2>/dev/null || true
-./ADMDynAnlz_mac_x86_64
-```
-
-### Windows
-
-In most cases you can run the Windows executable directly. If Windows marks the file as downloaded from the internet, open PowerShell in the download folder and run:
-
-```powershell
-Unblock-File .\ADMDynAnlz_Windows.exe
-.\ADMDynAnlz_Windows.exe
-```
-
-## Repository Scope
-
-This public repository contains the GUI application and user-facing project files needed to run or package the software.
-
-Platform executables may be distributed as GitHub release assets rather than regular repository files.
-
-For maintainers updating the Linux build:
-
-- executables are published as GitHub release assets rather than being committed into repository history
-- this avoids rapid repository bloat from repeated large binary updates
-
-To publish executables as release assets, authentication can be provided by:
-
-- `PUBLIC_REPO_TOKEN`
-- `GITHUB_TOKEN`
-- `GH_TOKEN`
-- `gh auth token` after logging in with GitHub CLI
-
-To create a GitHub token:
-
-1. Sign in to GitHub.
-2. Open `Settings`.
-3. Open `Developer settings`.
-4. Open `Personal access tokens`.
-5. Create a token with repository access for the target public repo.
-
-Example:
-
-```bash
-export PUBLIC_REPO_TOKEN=your_token_here
-./publish_linux_to_public.sh
-```
 
 ## Citation
 
