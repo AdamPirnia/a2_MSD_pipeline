@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="44" viewBox="0 0 220 44" role="img" aria-labelledby="title">
+  <title>Prep. Run</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9b6bff"/>
+      <stop offset="100%" stop-color="#7a3fe0"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="4" width="216" height="36" rx="8" fill="#4d2399"/>
+  <rect x="2" y="2" width="216" height="36" rx="8" fill="url(#bg)" stroke="#c7a9ff" stroke-width="1"/>
+  <rect x="8" y="7" width="204" height="10" rx="5" fill="#ffffff" opacity="0.18"/>
+  <text x="110" y="26" fill="#ffffff" font-family="Verdana, DejaVu Sans, Arial, sans-serif" font-size="16" font-weight="700" text-anchor="middle" letter-spacing="1.2">PREP. RUN</text>
+</svg>

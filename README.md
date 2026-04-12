@@ -1,17 +1,8 @@
 # ADMDynAnlz
 
-<a href="Run_Prep.md" style="text-decoration: none;">
-  <span style="display: inline-block; width: 150px; background: #7a3fe0; color: #ffffff; padding: 7px 12px; font-weight: 700; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; box-sizing: border-box;">Prep. Run</span>
-</a>
-<span>Download, setup, and launch steps.</span><br>
-<a href="Manual.md" style="text-decoration: none;">
-  <span style="display: inline-block; width: 150px; background: #1f6feb; color: #ffffff; padding: 7px 12px; font-weight: 700; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; box-sizing: border-box;">User Manual</span>
-</a>
-<span>Module-by-module usage guide.</span><br>
-<a href="CITATION.md" style="text-decoration: none;">
-  <span style="display: inline-block; width: 150px; background: #0a7f5a; color: #ffffff; padding: 7px 12px; font-weight: 700; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; box-sizing: border-box;">Citation</span>
-</a>
-<span>Reference information for citing the software.</span>
+[<img src="app_images/button_prep_run.svg" alt="Prep. Run" width="220">](Run_Prep.md) Download, setup, and launch steps.<br>
+[<img src="app_images/button_user_manual.svg" alt="User Manual" width="220">](Manual.md) Module-by-module usage guide.<br>
+[<img src="app_images/button_citation.svg" alt="Citation" width="220">](CITATION.md) Reference information for citing the software.
 
 ADMDynAnlz is a graphical workflow tool for post-processing molecular dynamics trajectories and generating analysis-ready workflows for transport and dynamical observables.
 
