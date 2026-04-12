@@ -1,49 +1,124 @@
 # Preparation and Running Software
 
-This chapter explains how to prepare the runtime environment for a downloaded executable and how to launch the software on each supported platform.
+## Requirements
 
-The distributed executable is the GUI itself. The Python environment described here is still important because the generated analysis scripts use Python packages such as `numpy`, `pandas`, `psutil`, `Pillow`, `PySide6`, `scipy`, and `matplotlib`.
+- Python 3.10 or newer
+- Python 3.12 recommended
+- `numpy`
+- VMD for trajectory-based extraction steps
 
-## Step 1: Download what you need
+For any `VMD Path` field, enter the actual VMD executable path or an actual runnable launcher command. Do not rely on shell aliases.
 
-Users normally need:
+Platform notes:
 
-- one platform executable from the GitHub release assets
-- the public repository files or public ZIP, which include documentation and helper files such as `configure.sh`
+- macOS: use the real executable or launcher path from the VMD application bundle, not an alias such as `vmd` defined only in your interactive shell
+- Windows: use the real `vmd.exe` path, not a desktop shortcut or a shell-only wrapper command
 
-Choose the executable that matches your platform:
+Generic examples:
+
+- macOS: `/Applications/VMD ... .app/Contents/MacOS/...`
+- Windows: `C:\Program Files\VMD\...\vmd.exe`
+
+## How and what to download
+
+You need to download two different things from this project:
+
+- the repository source code, if you want the scripts, documentation, and editable project files
+- a prebuilt executable from the GitHub Releases page, if you only want to run the GUI application
+
+Choose the executable that matches your system:
 
 - Linux: `ADMDynAnlz_Linux`
 - macOS Apple Silicon: `ADMDynAnlz_mac_arm64`
 - macOS Intel: `ADMDynAnlz_mac_x86_64`
 - Windows: `ADMDynAnlz_Windows.exe`
 
-## Recommended method: use `configure.sh`
+Repository page:
 
-The easiest preparation path is to use `configure.sh`.
+- `https://github.com/AdamPirnia/ADMDynAnlz`
 
-From a terminal in the folder containing `configure.sh` and the downloaded executable, run:
+Releases page:
+
+- `https://github.com/AdamPirnia/ADMDynAnlz/releases`
+
+### Web browser
+
+To download the repository source code in a browser:
+
+1. Open `https://github.com/AdamPirnia/ADMDynAnlz`
+2. Click `Code`
+3. Choose either:
+   - `Download ZIP` to download the repository as an archive
+   - the repository URL if you only want to copy the clone link for later use
+
+To download a prebuilt executable in a browser:
+
+1. Open `https://github.com/AdamPirnia/ADMDynAnlz/releases`
+2. Open the latest release, or another release if you need a specific version
+3. In the `Assets` section, download the file for your operating system
+
+### Command line
+
+To download the repository source code with Git:
+
+```bash
+git clone https://github.com/AdamPirnia/ADMDynAnlz.git
+cd ADMDynAnlz
+```
+
+If you prefer GitHub CLI, you can also clone with:
+
+```bash
+gh repo clone AdamPirnia/ADMDynAnlz
+cd ADMDynAnlz
+```
+
+To download a release executable with GitHub CLI:
+
+```bash
+gh release download --repo AdamPirnia/ADMDynAnlz --pattern "ADMDynAnlz_Linux"
+```
+
+Replace `ADMDynAnlz_Linux` with the file you actually want:
+
+- `ADMDynAnlz_mac_arm64`
+- `ADMDynAnlz_mac_x86_64`
+- `ADMDynAnlz_Windows.exe`
+
+If you do not use GitHub CLI, you can download directly with `curl`. Replace `TAG_NAME` with the release tag you want, such as `v1.0.0`, and replace the filename with the correct asset name:
+
+```bash
+curl -LO https://github.com/AdamPirnia/ADMDynAnlz/releases/download/TAG_NAME/ADMDynAnlz_Linux
+```
+
+Equivalent `wget` example:
+
+```bash
+wget https://github.com/AdamPirnia/ADMDynAnlz/releases/download/TAG_NAME/ADMDynAnlz_Linux
+```
+
+## Setup and Running
+
+The recommended way to prepare a downloaded executable is to use [configure.sh](configure.sh).
+
+From the folder that contains both `configure.sh` and your downloaded executable, run:
 
 ```bash
 chmod +x configure.sh
 ./configure.sh
 ```
 
-What these commands do:
+The configurator will:
 
-- `chmod +x configure.sh`
-  makes the helper script executable on Unix-like systems such as Linux and macOS
-- `./configure.sh`
-  starts the interactive configurator
+- ask which executable you downloaded
+- create a local Python environment
+- install the Python packages needed by the generated analysis scripts
+- prepare the downloaded executable for your platform
+- print the command needed to launch the software
 
-What the configurator does:
+This chapter also explains how to prepare the runtime environment for a downloaded executable and how to launch the software on each supported platform.
 
-- asks which platform executable you downloaded
-- creates a local Python environment
-- installs the required Python packages
-- verifies that the Python environment works
-- prepares the executable for the selected platform
-- prints the exact launch command
+The distributed executable is the GUI itself. The Python environment described here is still important because the generated analysis scripts use Python packages such as `numpy`, `pandas`, `psutil`, `Pillow`, `PySide6`, `scipy`, and `matplotlib`.
 
 ## Manual method
 

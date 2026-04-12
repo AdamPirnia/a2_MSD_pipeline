@@ -1,22 +1,33 @@
 # ADMDynAnlz
 
-[![User Manual](https://img.shields.io/badge/User%20Manual-Open-1f6feb)](Manual.md)
-[![Prep. Run](https://img.shields.io/badge/Prep.%20Run-Open-7a3fe0)](Run_Prep.md)
-[![Citation](https://img.shields.io/badge/Citation-Open-0a7f5a)](CITATION.md)
+<a href="Run_Prep.md" style="text-decoration: none;">
+  <span style="display: inline-block; width: 150px; background: #7a3fe0; color: #ffffff; padding: 7px 12px; font-weight: 700; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; box-sizing: border-box;">Prep. Run</span>
+</a>
+<span>Download, setup, and launch steps.</span><br>
+<a href="Manual.md" style="text-decoration: none;">
+  <span style="display: inline-block; width: 150px; background: #1f6feb; color: #ffffff; padding: 7px 12px; font-weight: 700; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; box-sizing: border-box;">User Manual</span>
+</a>
+<span>Module-by-module usage guide.</span><br>
+<a href="CITATION.md" style="text-decoration: none;">
+  <span style="display: inline-block; width: 150px; background: #0a7f5a; color: #ffffff; padding: 7px 12px; font-weight: 700; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; box-sizing: border-box;">Citation</span>
+</a>
+<span>Reference information for citing the software.</span>
 
 ADMDynAnlz is a graphical workflow tool for post-processing molecular dynamics trajectories and generating analysis-ready workflows for transport and dynamical observables.
 
 The current distributed application is the Qt GUI.
 
-The application currently provides five GUI modules:
+The application currently provides six GUI modules:
 
 - `Coordinates extraction`
 - `Velocities and Dipoles`
 - `MSD and NGP / Anisotropic NGP`
 - `Correlation Functions`
 - `Diffusion constant`
+- `Static Structure Factor`
 
 Detailed section-by-section instructions are available in [Manual.md](Manual.md).
+A dedicated preparation and download guide is available in [Run_Prep.md](Run_Prep.md).
 
 ## What the Software Does
 
@@ -26,124 +37,6 @@ ADMDynAnlz is designed to help users:
 - organize analysis inputs through a GUI instead of manual script editing
 - generate execution-ready analysis scripts
 - prepare local or cluster-oriented workflows, including SLURM job files when needed
-
-## Requirements
-
-- Python 3.10 or newer
-- Python 3.12 recommended
-- `numpy`
-- VMD for trajectory-based extraction steps
-
-For any `VMD Path` field, enter the actual VMD executable path or an actual runnable launcher command. Do not rely on shell aliases.
-
-Platform notes:
-
-- macOS: use the real executable or launcher path from the VMD application bundle, not an alias such as `vmd` defined only in your interactive shell
-- Windows: use the real `vmd.exe` path, not a desktop shortcut or a shell-only wrapper command
-
-Generic examples:
-
-- macOS: `/Applications/VMD ... .app/Contents/MacOS/...`
-- Windows: `C:\Program Files\VMD\...\vmd.exe`
-
-## How and what to download
-
-You need to download two different things from this project:
-
-- the repository source code, if you want the scripts, documentation, and editable project files
-- a prebuilt executable from the GitHub Releases page, if you only want to run the GUI application
-
-Choose the executable that matches your system:
-
-- Linux: `ADMDynAnlz_Linux`
-- macOS Apple Silicon: `ADMDynAnlz_mac_arm64`
-- macOS Intel: `ADMDynAnlz_mac_x86_64`
-- Windows: `ADMDynAnlz_Windows.exe`
-
-Repository page:
-
-- `https://github.com/AdamPirnia/ADMDynAnlz`
-
-Releases page:
-
-- `https://github.com/AdamPirnia/ADMDynAnlz/releases`
-
-### Web browser
-
-To download the repository source code in a browser:
-
-1. Open `https://github.com/AdamPirnia/ADMDynAnlz`
-2. Click `Code`
-3. Choose either:
-   - `Download ZIP` to download the repository as an archive
-   - the repository URL if you only want to copy the clone link for later use
-
-To download a prebuilt executable in a browser:
-
-1. Open `https://github.com/AdamPirnia/ADMDynAnlz/releases`
-2. Open the latest release, or another release if you need a specific version
-3. In the `Assets` section, download the file for your operating system
-
-### Command line
-
-To download the repository source code with Git:
-
-```bash
-git clone https://github.com/AdamPirnia/ADMDynAnlz.git
-cd ADMDynAnlz
-```
-
-If you prefer GitHub CLI, you can also clone with:
-
-```bash
-gh repo clone AdamPirnia/ADMDynAnlz
-cd ADMDynAnlz
-```
-
-To download a release executable with GitHub CLI:
-
-```bash
-gh release download --repo AdamPirnia/ADMDynAnlz --pattern "ADMDynAnlz_Linux"
-```
-
-Replace `ADMDynAnlz_Linux` with the file you actually want:
-
-- `ADMDynAnlz_mac_arm64`
-- `ADMDynAnlz_mac_x86_64`
-- `ADMDynAnlz_Windows.exe`
-
-If you do not use GitHub CLI, you can download directly with `curl`. Replace `TAG_NAME` with the release tag you want, such as `v1.0.0`, and replace the filename with the correct asset name:
-
-```bash
-curl -LO https://github.com/AdamPirnia/ADMDynAnlz/releases/download/TAG_NAME/ADMDynAnlz_Linux
-```
-
-Equivalent `wget` example:
-
-```bash
-wget https://github.com/AdamPirnia/ADMDynAnlz/releases/download/TAG_NAME/ADMDynAnlz_Linux
-```
-
-## Setup and Running
-
-The recommended way to prepare a downloaded executable is to use [configure.sh](configure.sh).
-
-From the folder that contains both `configure.sh` and your downloaded executable, run:
-
-```bash
-chmod +x configure.sh
-./configure.sh
-```
-
-The configurator will:
-
-- ask which executable you downloaded
-- create a local Python environment
-- install the Python packages needed by the generated analysis scripts
-- prepare the downloaded executable for your platform
-- print the command needed to launch the software
-
-If you prefer to do all the preparation steps manually, follow the detailed instructions in [Preparation and Running Software](Run_Prep.md).
 
 
 ## Interface Overview
@@ -278,6 +171,19 @@ It currently supports:
 - an MSD-based route
 - optional infinite-size correction for both routes
 - multiple temperatures in one generated script
+
+### 6. Static Structure Factor
+This module generates workflows for isotropic static-structure-factor analysis from saved coordinate arrays.
+
+Current inputs:
+
+- `Base Directory`
+- `Common Terms`
+- `Coordinate Path`
+- `Output Path`
+- `k Max`, `L_x`, `L_y`, `L_z`, and `tolerance`
+
+The generated workflow computes isotropic `S(k)` from the coordinate dataset and writes the result to the user-specified output path.
 
 `VACF-based diffusion constant`
 

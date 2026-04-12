@@ -626,6 +626,7 @@ For a standard coordinate-to-analysis workflow:
 3. Use `MSD and NGP / Anisotropic NGP` on the COM outputs.
 4. Use `Correlation Functions` when you already have numeric scalar or vector arrays and want correlation-analysis scripts for them.
 5. Use `Diffusion constant` when you already have saved VACF files, MSD files, or both, and want diffusion estimates from either route.
+6. Use `Static Structure Factor` when you want isotropic `S(k)` from saved coordinate arrays.
 
 ## Module 5: Diffusion Constant
 
@@ -829,6 +830,32 @@ If the correction is enabled, the output file ends with:
 - `D VACF, cm^2/s` and `D MSD, cm^2/s`: centimeters squared per second
 - `tau, ps`: picoseconds
 - `VACF var, ang^2/ps^2` and `equipartition var, ang^2/ps^2`: angstrom squared per picosecond squared
+
+## Module 6: Static Structure Factor
+
+This module generates scripts for isotropic static-structure-factor analysis from saved coordinate arrays.
+
+## Common Parameters
+
+- `Base Directory`: root folder used to resolve relative coordinate paths
+- `Common Terms`: optional `*` and `**` replacements, exactly like the other modules
+
+## Structure Factor
+
+### Isotropic Structure Factor
+
+- `Coordinate Path`: path pattern for the coordinate dataset
+- `Output Path`: full output path and filename for the generated `S(k)` table
+- `k Max`: maximum reciprocal-space magnitude included in the generated `k` list
+- `L_x`, `L_y`, `L_z`: orthorhombic box lengths used for reciprocal-vector generation and minimum-image distances
+- `tolerance`: tolerance used to merge nearby `|k|` magnitudes into unique isotropic sampling values
+- `Trajectory desired length (optional)`: a single integer uses the first `N` frames from each coordinate file; `range(start, stop[, step])` uses that frame window from each file
+
+Notes:
+
+- `Coordinate Path` and `Output Path` support `*` and `**`; `Coordinate Path` also supports `{i}`
+- the current module writes one `S(k)` table to the specified output path
+- isothermal compressibility is intentionally not included in this version of the module
 
 ## Final notes
 
