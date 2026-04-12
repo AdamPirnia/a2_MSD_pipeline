@@ -62,17 +62,17 @@ Choose the executable that matches your system:
 
 Repository page:
 
-- `https://github.com/adampirnia/a2_MSD_source`
+- `https://github.com/AdamPirnia/ADMDynAnlz`
 
 Releases page:
 
-- `https://github.com/adampirnia/a2_MSD_source/releases`
+- `https://github.com/AdamPirnia/ADMDynAnlz/releases`
 
 ### Web browser
 
 To download the repository source code in a browser:
 
-1. Open `https://github.com/adampirnia/a2_MSD_source`
+1. Open `https://github.com/AdamPirnia/ADMDynAnlz`
 2. Click `Code`
 3. Choose either:
    - `Download ZIP` to download the repository as an archive
@@ -80,7 +80,7 @@ To download the repository source code in a browser:
 
 To download a prebuilt executable in a browser:
 
-1. Open `https://github.com/adampirnia/a2_MSD_source/releases`
+1. Open `https://github.com/AdamPirnia/ADMDynAnlz/releases`
 2. Open the latest release, or another release if you need a specific version
 3. In the `Assets` section, download the file for your operating system
 
@@ -89,21 +89,21 @@ To download a prebuilt executable in a browser:
 To download the repository source code with Git:
 
 ```bash
-git clone https://github.com/adampirnia/a2_MSD_source.git
-cd a2_MSD_source
+git clone https://github.com/AdamPirnia/ADMDynAnlz.git
+cd ADMDynAnlz
 ```
 
 If you prefer GitHub CLI, you can also clone with:
 
 ```bash
-gh repo clone adampirnia/a2_MSD_source
-cd a2_MSD_source
+gh repo clone AdamPirnia/ADMDynAnlz
+cd ADMDynAnlz
 ```
 
 To download a release executable with GitHub CLI:
 
 ```bash
-gh release download --repo adampirnia/a2_MSD_source --pattern "ADMDynAnlz_Linux"
+gh release download --repo AdamPirnia/ADMDynAnlz --pattern "ADMDynAnlz_Linux"
 ```
 
 Replace `ADMDynAnlz_Linux` with the file you actually want:
@@ -115,13 +115,13 @@ Replace `ADMDynAnlz_Linux` with the file you actually want:
 If you do not use GitHub CLI, you can download directly with `curl`. Replace `TAG_NAME` with the release tag you want, such as `v1.0.0`, and replace the filename with the correct asset name:
 
 ```bash
-curl -LO https://github.com/adampirnia/a2_MSD_source/releases/download/TAG_NAME/ADMDynAnlz_Linux
+curl -LO https://github.com/AdamPirnia/ADMDynAnlz/releases/download/TAG_NAME/ADMDynAnlz_Linux
 ```
 
 Equivalent `wget` example:
 
 ```bash
-wget https://github.com/adampirnia/a2_MSD_source/releases/download/TAG_NAME/ADMDynAnlz_Linux
+wget https://github.com/AdamPirnia/ADMDynAnlz/releases/download/TAG_NAME/ADMDynAnlz_Linux
 ```
 
 ## Setup and Running
