@@ -73,6 +73,19 @@ activate_venv() {
   exit 1
 }
 
+activation_command() {
+  if [[ -f "${VENV_DIR}/bin/activate" ]]; then
+    echo "source ${VENV_DIR}/bin/activate"
+    return
+  fi
+  if [[ -f "${VENV_DIR}/Scripts/activate" ]]; then
+    echo "source ${VENV_DIR}/Scripts/activate"
+    return
+  fi
+  echo "Could not determine the activation command for ${VENV_DIR}." >&2
+  exit 1
+}
+
 install_packages() {
   echo "Upgrading pip/setuptools/wheel ..."
   python -m pip install --upgrade pip setuptools wheel
@@ -136,6 +149,28 @@ prepare_windows() {
   echo ".\\${exec_name}"
 }
 
+open_activated_shell() {
+  local activate_cmd
+  activate_cmd="$(activation_command)"
+  local rcfile
+  rcfile="$(mktemp)"
+  cat > "$rcfile" <<EOF
+$activate_cmd
+echo
+echo "ADMDynAnlz environment is active."
+echo "Run the software with the command shown above."
+echo "When you are done, type: deactivate"
+EOF
+  echo
+  echo "To deactivate the environment later:"
+  echo "deactivate"
+  echo "To activate it later:"
+  echo "$activate_cmd"
+  echo
+  echo "Opening a new shell with the environment already activated..."
+  exec bash --rcfile "$rcfile" -i
+}
+
 main() {
   print_header
   read -r -p "Enter 1, 2, 3, or 4: " choice
@@ -169,12 +204,7 @@ main() {
 
   echo
   echo "Environment location: ${VENV_DIR}"
-  echo "To activate it later:"
-  if [[ -f "${VENV_DIR}/bin/activate" ]]; then
-    echo "source ${VENV_DIR}/bin/activate"
-  else
-    echo "source ${VENV_DIR}/Scripts/activate"
-  fi
+  open_activated_shell
 }
 
 main "$@"
