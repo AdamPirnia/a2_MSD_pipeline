@@ -62,8 +62,8 @@ MSD stands for **Mean Squared Displacement**. It measures the average squared di
 ### NGP
 NGP stands for **Non-Gaussian Parameter**. It measures deviations from ideal Gaussian diffusion and helps identify non-Fickian dynamics.
 
-### Anisotropy Parameter
-The anisotropy parameter quantifies directional anisotropy in molecular translational motion.
+### Anisotropic NGP
+Anisotropic NGP quantifies directional anisotropy in molecular translational motion.
 
 ### COM
 COM stands for **center of mass**.
@@ -112,7 +112,7 @@ This module generates workflows for:
 
 - **MSD**: Mean Squared Displacement
 - **NGP**: Non-Gaussian Parameter
-- **Anisotropy parameter**
+- **Anisotropic NGP**
 
 `NGP α₂(t)`
 
@@ -123,7 +123,7 @@ This module generates workflows for:
   </picture>
 </p>
 
-`Anisotropy parameter`
+`Anisotropic NGP`
 
 <p align="center">
   <picture>
@@ -136,7 +136,7 @@ Typical outputs and units:
 
 - MSD: squared length in the square of the coordinate unit
 - NGP `α₂(t)`: dimensionless
-- directional anisotropy outputs and anisotropy parameter: dimensionless
+- directional anisotropy outputs and anisotropic NGP: dimensionless
 
 ### 4. Correlation Functions
 This module generates workflows for time-correlation analysis from numeric data arrays.
@@ -166,28 +166,6 @@ It currently supports:
 - an MSD-based route
 - optional infinite-size correction for both routes
 - multiple temperatures in one generated script
-
-### 6. Static Structure Factor
-This module generates workflows for isotropic static-structure-factor analysis from saved coordinate arrays.
-
-Current inputs:
-
-- `Base Directory`
-- `Common Terms`
-- `Coordinate Path`
-- `Output Path`
-- `k Max`, `L_x`, `L_y`, `L_z`, and `tolerance`
-
-The generated workflow computes isotropic `S(k)` from the coordinate dataset and writes the result to the user-specified output path.
-
-`Isotropic static structure factor`
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="app_images/static_structure_factor.png">
-    <img src="app_images/static_structure_factor.png" alt="Static structure factor equation" width="66%">
-  </picture>
-</p>
 
 `VACF-based diffusion constant`
 
@@ -229,6 +207,28 @@ Input-handling highlights:
 - if a time axis does not exist, the module reconstructs time from the saved-frame timestep
 - normalized VACF input disables velocity-unit conversion and uses the equipartition variance for the diffusion estimate
 - if multiple temperatures match one common-term list exactly, temperatures are paired with that common term instead of nested separately
+
+### 6. Static Structure Factor
+This module generates workflows for isotropic static-structure-factor analysis from saved coordinate arrays.
+
+Current inputs:
+
+- `Base Directory`
+- `Common Terms`
+- `Coordinate Path`
+- `Output Path`
+- `k Max`, `L_x`, `L_y`, `L_z`, and `tolerance`
+
+The generated workflow computes isotropic `S(k)` from the coordinate dataset and writes the result to the user-specified output path.
+
+`Isotropic static structure factor`
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app_images/static_structure_factor_dark.png">
+    <img src="app_images/static_structure_factor.png" alt="Static structure factor equation" width="66%">
+  </picture>
+</p>
 
 
 ## Citation
