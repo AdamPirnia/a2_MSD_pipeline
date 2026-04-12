@@ -62,22 +62,8 @@ MSD stands for **Mean Squared Displacement**. It measures the average squared di
 ### NGP
 NGP stands for **Non-Gaussian Parameter**. It measures deviations from ideal Gaussian diffusion and helps identify non-Fickian dynamics.
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="app_images/equation_alhpa_2_dark.png">
-    <img src="app_images/equation_alhpa_2.png" alt="alpha2 equation" width="62%">
-  </picture>
-</p>
-
 ### Anisotropy Parameter
 The anisotropy parameter quantifies directional anisotropy in molecular translational motion.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="app_images/equation_alhpa_ani_dark.png">
-    <img src="app_images/equation_alhpa_ani.png" alt="alpha anisotropy equation" width="72%">
-  </picture>
-</p>
 
 ### COM
 COM stands for **center of mass**.
@@ -128,6 +114,24 @@ This module generates workflows for:
 - **NGP**: Non-Gaussian Parameter
 - **Anisotropy parameter**
 
+`NGP α₂(t)`
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app_images/equation_alhpa_2_dark.png">
+    <img src="app_images/equation_alhpa_2.png" alt="alpha2 equation" width="62%">
+  </picture>
+</p>
+
+`Anisotropy parameter`
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app_images/equation_alhpa_ani_dark.png">
+    <img src="app_images/equation_alhpa_ani.png" alt="alpha anisotropy equation" width="72%">
+  </picture>
+</p>
+
 Typical outputs and units:
 
 - MSD: squared length in the square of the coordinate unit
@@ -175,6 +179,15 @@ Current inputs:
 - `k Max`, `L_x`, `L_y`, `L_z`, and `tolerance`
 
 The generated workflow computes isotropic `S(k)` from the coordinate dataset and writes the result to the user-specified output path.
+
+`Isotropic static structure factor`
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app_images/static_structure_factor.png">
+    <img src="app_images/static_structure_factor.png" alt="Static structure factor equation" width="66%">
+  </picture>
+</p>
 
 `VACF-based diffusion constant`
 
