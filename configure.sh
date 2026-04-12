@@ -56,23 +56,6 @@ create_venv() {
   fi
 }
 
-activate_venv() {
-  if [[ -f "${VENV_DIR}/bin/activate" ]]; then
-    # Linux/macOS
-    # shellcheck disable=SC1091
-    source "${VENV_DIR}/bin/activate"
-    return
-  fi
-  if [[ -f "${VENV_DIR}/Scripts/activate" ]]; then
-    # Git Bash / similar Windows shells
-    # shellcheck disable=SC1091
-    source "${VENV_DIR}/Scripts/activate"
-    return
-  fi
-  echo "Could not find an activation script in ${VENV_DIR}." >&2
-  exit 1
-}
-
 activation_command() {
   if [[ -f "${VENV_DIR}/bin/activate" ]]; then
     echo "source ${VENV_DIR}/bin/activate"
@@ -86,17 +69,38 @@ activation_command() {
   exit 1
 }
 
+venv_python() {
+  if [[ -x "${VENV_DIR}/bin/python" ]]; then
+    echo "${VENV_DIR}/bin/python"
+    return
+  fi
+  if [[ -x "${VENV_DIR}/Scripts/python.exe" ]]; then
+    echo "${VENV_DIR}/Scripts/python.exe"
+    return
+  fi
+  if [[ -x "${VENV_DIR}/Scripts/python" ]]; then
+    echo "${VENV_DIR}/Scripts/python"
+    return
+  fi
+  echo "Could not find the Python executable inside ${VENV_DIR}." >&2
+  exit 1
+}
+
 install_packages() {
+  local py
+  py="$(venv_python)"
   echo "Upgrading pip/setuptools/wheel ..."
-  python -m pip install --upgrade pip setuptools wheel
+  "$py" -m pip install --upgrade pip setuptools wheel
   echo "Installing required Python packages ..."
-  python -m pip install "${PIP_PACKAGES[@]}"
+  "$py" -m pip install "${PIP_PACKAGES[@]}"
 }
 
 verify_packages() {
+  local py
+  py="$(venv_python)"
   echo "Verifying Python package installation ..."
-  python --version
-  python -c "import numpy, pandas, psutil, PIL, PySide6; print('ok')"
+  "$py" --version
+  "$py" -c "import numpy, pandas, psutil, PIL, PySide6; print('ok')"
 }
 
 prepare_linux() {
@@ -191,7 +195,6 @@ main() {
   echo
 
   create_venv
-  activate_venv
   install_packages
   verify_packages
 
