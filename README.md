@@ -1,6 +1,7 @@
 # ADMDynAnlz
 
 [![User Manual](https://img.shields.io/badge/User%20Manual-Open-1f6feb)](Manual.md)
+[![Prep. Run](https://img.shields.io/badge/Prep.%20Run-Open-7a3fe0)](Run_Prep.md)
 [![Citation](https://img.shields.io/badge/Citation-Open-0a7f5a)](CITATION.md)
 
 ADMDynAnlz is a graphical workflow tool for post-processing molecular dynamics trajectories and generating analysis-ready workflows for transport and dynamical observables.
@@ -123,77 +124,26 @@ Equivalent `wget` example:
 wget https://github.com/adampirnia/a2_MSD_source/releases/download/TAG_NAME/ADMDynAnlz_Linux
 ```
 
-## Python Environment Setup
+## Setup and Running
 
-ADMDynAnlz now uses Python features that require Python 3.10 or newer. The recommended setup is a Conda environment named `admdyn` with Python 3.12 so you do not need to change your system-default Python.
+The recommended way to prepare a downloaded executable is to use [configure.sh](configure.sh).
 
-### macOS and Linux
-
-If you do not already have Conda installed, install Miniconda or Anaconda first. Then create and activate the environment:
+From the folder that contains both `configure.sh` and your downloaded executable, run:
 
 ```bash
-conda create -n admdyn python=3.12
-conda activate admdyn
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install numpy pandas psutil Pillow PySide6 pyinstaller scipy matplotlib
+chmod +x configure.sh
+./configure.sh
 ```
 
-Optional verification:
+The configurator will:
 
-```bash
-python --version
-python -c "import numpy, pandas, psutil, PIL, PySide6; print('ok')"
-```
+- ask which executable you downloaded
+- create a local Python environment
+- install the Python packages needed by the generated analysis scripts
+- prepare the downloaded executable for your platform
+- print the command needed to launch the software
 
-When the environment is active, your shell prompt usually starts with `(admdyn)`.
-
-To leave the environment later:
-
-```bash
-conda deactivate
-```
-
-## Running Downloaded Executables
-
-### Linux
-
-If needed, make the executable runnable and launch it from a terminal:
-
-```bash
-chmod +x ADMDynAnlz_Linux
-./ADMDynAnlz_Linux
-```
-
-On Linux, double-click launching can also work when the file is marked as executable and the desktop environment allows launching executable files directly.
-
-### macOS Apple Silicon
-
-If you downloaded the Apple Silicon build, run:
-
-```bash
-chmod +x ADMDynAnlz_mac_arm64
-xattr -d com.apple.quarantine ADMDynAnlz_mac_arm64 2>/dev/null || true
-./ADMDynAnlz_mac_arm64
-```
-
-### macOS Intel
-
-If you downloaded the Intel build, run:
-
-```bash
-chmod +x ADMDynAnlz_mac_x86_64
-xattr -d com.apple.quarantine ADMDynAnlz_mac_x86_64 2>/dev/null || true
-./ADMDynAnlz_mac_x86_64
-```
-
-### Windows
-
-In most cases you can run the Windows executable directly. If Windows marks the file as downloaded from the internet, open PowerShell in the download folder and run:
-
-```powershell
-Unblock-File .\ADMDynAnlz_Windows.exe
-.\ADMDynAnlz_Windows.exe
-```
+If you prefer to do all the preparation steps manually, follow the detailed instructions in [Preparation and Running Software](Run_Prep.md).
 
 
 ## Interface Overview
