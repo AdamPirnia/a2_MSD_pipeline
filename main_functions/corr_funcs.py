@@ -260,6 +260,8 @@ def calculate_correlation_from_files(
     baseDir: str,
     array1_pattern: str,
     array2_pattern: str,
+    array1_stride: int,
+    array2_stride: int,
     output_pattern: str,
     variance_output_pattern: str,
     num_dcd: int,
@@ -282,6 +284,10 @@ def calculate_correlation_from_files(
         raise ValueError("baseDir is required")
     if not array1_pattern or not array2_pattern or not output_pattern or not variance_output_pattern:
         raise ValueError("array1_pattern, array2_pattern, output_pattern, and variance_output_pattern are required")
+    array1_stride = int(array1_stride)
+    array2_stride = int(array2_stride)
+    if array1_stride <= 0 or array2_stride <= 0:
+        raise ValueError("array1_stride and array2_stride must be positive integers")
 
     indices = list(range(int(num_dcd))) if dcd_indices is None else [int(i) for i in dcd_indices]
     subtract_mean = str(acf_mode).strip().lower() == "acf"
@@ -309,6 +315,8 @@ def calculate_correlation_from_files(
                 default_mode="text",
                 default_precision="double",
             )
+            array1 = array1[::array1_stride]
+            array2 = array2[::array2_stride]
             variance, series = calculate_correlation(
                 array1,
                 array2,
