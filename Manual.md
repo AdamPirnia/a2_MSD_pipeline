@@ -84,9 +84,9 @@ expands across all combinations:
 
 The generated workflow handles the nested looping. The low-level analysis functions still receive fully expanded concrete paths.
 
-### VMD Path on macOS and Windows
+### VMD Path on macOS, Linux, and Windows
 
-For any field that asks for a `VMD Path` or `VMD Executable Path`, enter the actual VMD executable path or an actual runnable launcher command.
+For any field that asks for a `VMD Path` or `VMD Executable Path`, enter the actual VMD executable path that can be run directly by the software.
 
 Do not rely on:
 
@@ -96,13 +96,18 @@ Do not rely on:
 
 Platform guidance:
 
-- macOS: use the real path from inside the VMD application bundle rather than an alias such as `vmd`
+- macOS: use the real executable from inside the VMD application bundle, not `startup.command.csh`
+- macOS: to inspect the bundle from Terminal, run `ls -l "/Applications/VMD ... .app/Contents/vmd"` and use the actual binary you find there, for example `vmd_MACOSXARM64`
 - macOS: if extraction produces zero-byte `.rawf32` / `.shape` files, do not use `startup.command.csh`; use the actual VMD executable inside the app bundle
+- Linux: use the real VMD executable path, or a real executable/symlink that is on `PATH`
+- Linux: if `vmd` works in your terminal, run `which -a vmd` to find the executable that should be entered into the software
 - Windows: use the actual `vmd.exe` path rather than a shortcut or non-executable launcher entry
+- Windows: find the installed `vmd.exe`, typically under `C:\Program Files\VMD\...`, and enter that full path
 
 Generic examples:
 
-- macOS: `/Applications/VMD ... .app/Contents/MacOS/...`
+- macOS: `/Applications/VMD ... .app/Contents/vmd/vmd_MACOSXARM64`
+- Linux: `/usr/local/bin/vmd` or another real executable path returned by `which -a vmd`
 - Windows: `C:\Program Files\VMD\...\vmd.exe`
 
 If `vmd` works in your terminal but the generated workflow says it cannot find VMD, that usually means your terminal is using an alias or wrapper that the generated workflow cannot use directly.

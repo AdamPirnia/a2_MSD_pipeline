@@ -105,6 +105,15 @@ def _format_missing_file_message(label, path):
     return ". ".join(details)
 
 
+def _format_unreadable_file_message(label, path):
+    details = [f"{label} file exists but is empty or unavailable locally: {path}"]
+    details.append(
+        "If this file is in Dropbox, iCloud, OneDrive, or another cloud-synced folder, "
+        "make it available offline before running the analysis."
+    )
+    return " ".join(details)
+
+
 def _normalize_output_io_spec(output_io_spec):
     spec = dict(output_io_spec or {})
     mode = str(spec.get("mode") or "binary").strip().lower()
@@ -365,6 +374,10 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
             raise FileNotFoundError(_format_missing_file_message("PSF", test_psf))
         if not os.path.exists(test_dcd):
             raise FileNotFoundError(_format_missing_file_message("DCD", test_dcd))
+        if os.path.getsize(test_psf) <= 0:
+            raise ValueError(_format_unreadable_file_message("PSF", test_psf))
+        if os.path.getsize(test_dcd) <= 0:
+            raise ValueError(_format_unreadable_file_message("DCD", test_dcd))
         
         print(f"✓ Input files validated for index {dcd_list[0]}")
     

@@ -7,17 +7,22 @@
 - `numpy`
 - VMD for trajectory-based extraction steps
 
-For any `VMD Path` field, enter the actual VMD executable path or an actual runnable launcher command. Do not rely on shell aliases.
+For any `VMD Path` field, enter the actual VMD executable path that can be run directly by the software. Do not rely on shell aliases.
 
 Platform notes:
 
-- macOS: use the real executable or launcher path from the VMD application bundle, not an alias such as `vmd` defined only in your interactive shell
+- macOS: use the real executable from the VMD application bundle, not `startup.command.csh` and not an alias such as `vmd` defined only in your interactive shell
+- macOS: inspect the bundle with `ls -l "/Applications/VMD ... .app/Contents/vmd"` and use the actual binary you find there, such as `vmd_MACOSXARM64`
 - macOS: if a trajectory-extraction step creates zero-byte `.rawf32` / `.shape` files, do not use `startup.command.csh`; use the actual VMD executable inside the app bundle
+- Linux: use the real VMD executable path, or a real executable/symlink discoverable by `which -a vmd`
+- Linux: if `vmd` works in your terminal, run `which -a vmd` and enter that executable path in the software
 - Windows: use the real `vmd.exe` path, not a desktop shortcut or a shell-only wrapper command
+- Windows: locate the installed `vmd.exe`, typically under `C:\Program Files\VMD\...`, and enter that full path
 
 Generic examples:
 
-- macOS: `/Applications/VMD ... .app/Contents/MacOS/...`
+- macOS: `/Applications/VMD ... .app/Contents/vmd/vmd_MACOSXARM64`
+- Linux: `/usr/local/bin/vmd`
 - Windows: `C:\Program Files\VMD\...\vmd.exe`
 
 ## How and what to download

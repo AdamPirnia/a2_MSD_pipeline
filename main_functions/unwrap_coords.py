@@ -12,6 +12,14 @@ import re
 # Inlined path_utils functions to keep generated/runtime scripts self-contained
 _SAFE_INDEX_EXPR = re.compile(r"^i(?:\s*[+\-*/]\s*\d+)?$")
 
+
+def _format_unreadable_file_message(label, path):
+    return (
+        f"{label} file exists but is empty or unavailable locally: {path}. "
+        "If this file is in Dropbox, iCloud, OneDrive, or another cloud-synced folder, "
+        "make it available offline before running the analysis."
+    )
+
 def expand_path_pattern(pattern, common_param="", file_index=None):
     """Expand a path pattern with common parameter and file index."""
     if pattern is None:
@@ -216,6 +224,8 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
         # For XSC, use the first file's pattern (often XSC is the same for all)
         xsc_file = expand_path_pattern(xsc_pattern, common_term, dcd_list[0] if dcd_list else 0)
         xsc_path = os.path.join(baseDir, xsc_file)
+        if os.path.exists(xsc_path) and os.path.getsize(xsc_path) <= 0:
+            raise ValueError(_format_unreadable_file_message("XSC", xsc_path))
         
         with open(xsc_path, 'r') as fr:
             lines = fr.readlines()
@@ -235,6 +245,8 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
         first_input_path = os.path.join(baseDir, first_input)
         if not os.path.exists(first_input_path):
             raise FileNotFoundError(f"First input file not found: {first_input_path}")
+        if os.path.getsize(first_input_path) <= 0:
+            raise ValueError(_format_unreadable_file_message("Input coordinate", first_input_path))
         print(f"✓ Input files validated for index {dcd_list[0]}")
     
     # Determine optimal chunk size for memory efficiency
