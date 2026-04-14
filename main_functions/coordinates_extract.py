@@ -4,6 +4,7 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
 from difflib import get_close_matches
+import numpy as np
 try:
     from .numeric_io import (
         DEFAULT_DOUBLE_DECIMALS,
@@ -133,6 +134,65 @@ def _text_format_string(io_spec):
     else:
         decimals = DEFAULT_SINGLE_DECIMALS
     return f"%.{decimals}f"
+
+
+def _raw_binary_output_path(output_file):
+    return f"{output_file}.rawf32"
+
+
+def _raw_binary_shape_path(output_file):
+    return f"{output_file}.shape"
+
+
+def _finalize_binary_coordinate_output(output_file, output_io_spec):
+    """Convert VMD raw float32 output plus shape metadata into the requested final file."""
+    raw_output_file = _raw_binary_output_path(output_file)
+    shape_file = _raw_binary_shape_path(output_file)
+
+    if not os.path.exists(raw_output_file):
+        # Backward compatibility for older runs that may have written the final file directly.
+        if os.path.exists(output_file):
+            load_numeric_array(
+                output_file,
+                {"mode": "binary", "precision": "single"},
+                default_mode="binary",
+                default_precision="single",
+            )
+            return
+        raise FileNotFoundError(f"Raw binary coordinate output not found: {raw_output_file}")
+
+    if not os.path.exists(shape_file):
+        raise FileNotFoundError(f"Binary coordinate shape metadata not found: {shape_file}")
+
+    with open(shape_file, "r", encoding="utf-8") as handle:
+        shape_tokens = handle.read().strip().split()
+    if len(shape_tokens) != 2:
+        raise ValueError(f"Invalid binary coordinate shape metadata in {shape_file}")
+
+    try:
+        n_frames, n_columns = (int(shape_tokens[0]), int(shape_tokens[1]))
+    except ValueError as exc:
+        raise ValueError(f"Non-integer shape metadata in {shape_file}") from exc
+
+    data = np.fromfile(raw_output_file, dtype=np.float32)
+    expected_size = n_frames * n_columns
+    if data.size != expected_size:
+        raise ValueError(
+            f"Raw binary coordinate size mismatch for {raw_output_file}: "
+            f"expected {expected_size} float32 values, found {data.size}"
+        )
+
+    data = data.reshape(n_frames, n_columns)
+    save_numeric_array(
+        output_file,
+        data,
+        output_io_spec,
+        default_mode="binary",
+        default_precision="single",
+    )
+
+    os.remove(raw_output_file)
+    os.remove(shape_file)
 
 def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, vmd=None, max_workers=None, dcd_indices=None, common_term="", stride=1, wrap_settings=None, output_io_spec=None):
     """
@@ -527,23 +587,19 @@ def _write_tcl_script(
 """
         output_summary_label = "Text output written to"
     else:
+        raw_binary_path = _raw_binary_output_path(output_full_path)
+        binary_shape_path = _raw_binary_shape_path(output_full_path)
         output_open_block = "\n".join([
-            f'set outfile [open "{_tcl_quote(output_full_path)}" w]',
+            f'set outfile [open "{_tcl_quote(raw_binary_path)}" w]',
             "fconfigure $outfile -translation binary -encoding binary",
         ])
-        output_header_block = """
-# Write NumPy .npy header for float32 coordinates with shape (frames, num_atoms*3)
-set output_frames [expr {($num_frames + $stride - 1) / $stride}]
-set num_columns [expr {$num_atoms * 3}]
-set header_core [format "{'descr': '<f4', 'fortran_order': False, 'shape': (%d, %d), }" $output_frames $num_columns]
-set preamble_len 10
-set pad_len [expr {(16 - (($preamble_len + [string length $header_core] + 1) % 16)) % 16}]
-set header "${header_core}[string repeat " " $pad_len]\\n"
-set magic "\\x93NUMPY"
-set version [binary format cc 1 0]
-set header_len [string bytelength $header]
-set header_prefix [binary format su $header_len]
-puts -nonewline $outfile "${magic}${version}${header_prefix}${header}"
+        output_header_block = f"""
+# Persist raw float32 coordinates and let Python finalize the NumPy container.
+set output_frames [expr {{($num_frames + $stride - 1) / $stride}}]
+set num_columns [expr {{$num_atoms * 3}}]
+set shapefile [open "{_tcl_quote(binary_shape_path)}" w]
+puts $shapefile "$output_frames $num_columns"
+close $shapefile
 """
         output_frame_block = """
     $sel frame $frame
@@ -565,7 +621,7 @@ puts -nonewline $outfile "${magic}${version}${header_prefix}${header}"
         puts -nonewline $outfile $binary_chunk
     }
 """
-        output_summary_label = "NumPy output written to"
+        output_summary_label = "Raw binary coordinate output written to"
     
     with open(f"writenCodes/{tcl_filename}", "w") as f:
         f.write(f"""# Optimized coordinate extraction script for chunk {i}
@@ -688,24 +744,11 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
             log_file.write(f"STDERR:\n{process.stderr}\n")
         
         success = process.returncode == 0
-        if success and output_io_spec:
+        if success:
             output_file = os.path.join(baseDir, expand_path_pattern(output_pattern, common_term, index))
-            normalized_mode = str(output_io_spec.get("mode", "binary")).lower()
-            normalized_precision = str(output_io_spec.get("precision", "single")).lower()
-            if normalized_mode == "binary" and normalized_precision != "single":
-                data = load_numeric_array(
-                    output_file,
-                    {"mode": "binary", "precision": "single"},
-                    default_mode="binary",
-                    default_precision="single",
-                )
-                save_numeric_array(
-                    output_file,
-                    data,
-                    output_io_spec,
-                    default_mode="binary",
-                    default_precision="single",
-                )
+            normalized_output = _normalize_output_io_spec(output_io_spec)
+            if normalized_output["mode"] == "binary":
+                _finalize_binary_coordinate_output(output_file, normalized_output)
         return success, process.stdout, process.stderr
         
     except subprocess.TimeoutExpired:

@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import os
 import subprocess
 import tempfile
@@ -240,6 +239,33 @@ def _prepare_mass_configuration(particl_mass, prtcl_atoms):
 
     return atom_mask, effective_masses, total_mass
 
+
+def _build_legacy_com_metadata(prtcl_num, prtcl_atoms, particl_mass):
+    """Build COM metadata from fixed molecule count/atom masses when VMD metadata is unavailable."""
+    if prtcl_num is None or prtcl_atoms is None or particl_mass is None:
+        raise ValueError("Legacy COM metadata requires prtcl_num, prtcl_atoms, and particl_mass")
+
+    molecule_count = int(prtcl_num)
+    atoms_per_molecule = int(prtcl_atoms)
+    if molecule_count <= 0:
+        raise ValueError("prtcl_num must be a positive integer")
+    if atoms_per_molecule <= 0:
+        raise ValueError("prtcl_atoms must be a positive integer")
+
+    masses = np.asarray(particl_mass, dtype=np.float64)
+    if masses.size != atoms_per_molecule:
+        raise ValueError(
+            f"Mass list length ({masses.size}) must match prtcl_atoms ({atoms_per_molecule})"
+        )
+
+    return {
+        "atom_count": molecule_count * atoms_per_molecule,
+        "atom_masses": np.tile(masses, molecule_count),
+        "group_indices": np.repeat(np.arange(molecule_count, dtype=np.int32), atoms_per_molecule),
+        "group_labels": [str(i) for i in range(molecule_count)],
+        "psf_path": "<legacy-fixed-metadata>",
+    }
+
 ######################################################    Parameters    
 
 def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, target_selection=None, vmd_path=None, calc_mode="individual", grouping_unit="residue", max_workers=None, use_memmap=False, dcd_indices=None, common_term="", input_io_spec=None, output_io_spec=None, prtcl_num=None, prtcl_atoms=None, particl_mass=None):
@@ -359,15 +385,19 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, targ
             raise FileNotFoundError(f"First input file not found: {first_input_path}")
         print(f"✓ Input files validated for index {dcd_list[0]}")
 
-    metadata = _extract_selection_metadata(
-        baseDir,
-        psf_pattern,
-        dcd_list[0],
-        target_selection,
-        grouping_unit,
-        vmd_path,
-        common_term,
-    )
+    if prtcl_num is not None and prtcl_atoms is not None and particl_mass is not None:
+        metadata = _build_legacy_com_metadata(prtcl_num, prtcl_atoms, particl_mass)
+        print("Using legacy fixed-size COM metadata from prtcl_num/prtcl_atoms/particl_mass")
+    else:
+        metadata = _extract_selection_metadata(
+            baseDir,
+            psf_pattern,
+            dcd_list[0],
+            target_selection,
+            grouping_unit,
+            vmd_path,
+            common_term,
+        )
     com_metadata = _prepare_com_metadata(metadata, calc_mode)
     ignored_atoms = metadata["atom_count"] - int(np.count_nonzero(com_metadata["atom_mask"]))
     print(f"Resolved {metadata['atom_count']} atom(s) from PSF selection {metadata['psf_path']}")
