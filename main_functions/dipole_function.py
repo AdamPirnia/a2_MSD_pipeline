@@ -18,8 +18,8 @@ try:
 except ImportError:
     from numeric_io import load_numeric_array, save_numeric_array
 
-# Debye conversion constant  
-DEBYE_CONVERSION = 0.2081943  # e*Å to Debye
+# 1 Debye = 0.2081943 e*Å
+DEBYE_CONVERSION = 0.2081943
 
 
 def _tcl_quote(value):
@@ -194,7 +194,7 @@ def _compute_group_com_vectorized(atom_coords, metadata):
     return centers_of_mass
 
 
-def _compute_group_dipoles(atom_coords, metadata, calculate_magnitudes=True):
+def _compute_group_dipoles(atom_coords, metadata, dipole_unit="Debye", calculate_magnitudes=True):
     """Compute dipole vectors and magnitudes for variable-size groups."""
     centers_of_mass = _compute_group_com_vectorized(atom_coords, metadata)
     com_per_atom = centers_of_mass[:, metadata["group_indices_all"], :]
@@ -204,7 +204,12 @@ def _compute_group_dipoles(atom_coords, metadata, calculate_magnitudes=True):
     dipole_vectors = np.zeros((atom_coords.shape[0], metadata["group_count"], 3), dtype=np.float64)
     for group_index in range(metadata["group_count"]):
         atom_mask = metadata["group_indices_all"] == group_index
-        dipole_vectors[:, group_index, :] = np.sum(weighted[:, atom_mask, :], axis=1) / DEBYE_CONVERSION
+        dipole_vectors[:, group_index, :] = np.sum(weighted[:, atom_mask, :], axis=1)
+
+    if dipole_unit == "Debye":
+        dipole_vectors = dipole_vectors / DEBYE_CONVERSION
+    elif dipole_unit != "e·Å":
+        raise ValueError(f"Unsupported dipole unit: {dipole_unit}")
 
     dipole_magnitudes = None
     if calculate_magnitudes:
@@ -215,7 +220,7 @@ def _compute_group_dipoles(atom_coords, metadata, calculate_magnitudes=True):
 
 def _process_single_dipole_file(file_idx, baseDir, coords_pattern, output_pattern,
                                 magnitudes_pattern, dipole_metadata,
-                                stride, common_term,
+                                stride, common_term, dipole_unit,
                                 coords_input_io_spec=None,
                                 vectors_output_io_spec=None, magnitudes_output_io_spec=None):
     """Process a single trajectory file for dipole calculation - at module level for multiprocessing."""
@@ -261,7 +266,12 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, output_patter
         print(f"  Processing {n_frames} frames across {dipole_metadata['group_count']} dipole group(s)")
 
         calculate_magnitudes = bool(magnitudes_pattern)
-        dipole_vectors, dipole_magnitudes = _compute_group_dipoles(atom_coords, dipole_metadata, calculate_magnitudes=calculate_magnitudes)
+        dipole_vectors, dipole_magnitudes = _compute_group_dipoles(
+            atom_coords,
+            dipole_metadata,
+            dipole_unit=dipole_unit,
+            calculate_magnitudes=calculate_magnitudes,
+        )
         if calculate_magnitudes:
             print(f"  Dipole calculation returned: vectors {dipole_vectors.shape}, magnitudes {dipole_magnitudes.shape}")
         else:
@@ -332,6 +342,7 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, output_patter
         return {'success': False, 'error': error_details, 'file_idx': file_idx}
 
 def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd_path, grouping_unit,
+                    dipole_unit,
                     output_pattern, num_dcds, stride=1, max_workers=1, chunk_processing=True,
                     validate_data=True, progress_callback=None, common_term="",
                     magnitudes_pattern=None, dcd_indices=None,
@@ -355,6 +366,8 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
         Path to the VMD executable used to resolve PSF metadata.
     grouping_unit : str
         Grouping unit used to define individual dipoles. One of residue, chain, segname.
+    dipole_unit : str
+        Output dipole unit. One of Debye or e·Å.
     output_pattern : str
         Path pattern for output vector files OR output directory (backward compatibility).
         If magnitudes_pattern is None, treated as directory. Otherwise, treated as vector file pattern.
@@ -401,6 +414,8 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
         raise ValueError(f"Invalid output pattern: {error_msg}")
     if grouping_unit not in {"residue", "chain", "segname"}:
         raise ValueError("grouping_unit must be one of: residue, chain, segname")
+    if dipole_unit not in {"Debye", "e·Å"}:
+        raise ValueError("dipole_unit must be one of: Debye, e·Å")
     if not str(target_selection or "").strip():
         raise ValueError("target_selection is required for individual dipole calculation")
     if not str(vmd_path or "").strip():
@@ -430,6 +445,7 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
     print(f"PSF pattern: {psf_pattern}")
     print(f"Target selection: {target_selection}")
     print(f"Grouping unit: {grouping_unit}")
+    print(f"Dipole unit: {dipole_unit}")
     print(f"Common term: {common_term}")
     
     # Handle DCD selection
@@ -475,7 +491,7 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
                 # Submit all tasks
                 future_to_idx = {executor.submit(_process_single_dipole_file, i, baseDir, coords_pattern,
                                                  output_pattern, magnitudes_pattern, dipole_metadata,
-                                                 stride, common_term, coords_input_io_spec,
+                                                 stride, common_term, dipole_unit, coords_input_io_spec,
                                                  vectors_output_io_spec, magnitudes_output_io_spec): i for i in actual_dcd_list}
                 
                 # Process completed tasks
@@ -506,7 +522,7 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
                 for i in actual_dcd_list:
                     result = _process_single_dipole_file(i, baseDir, coords_pattern,
                                                        output_pattern, magnitudes_pattern, dipole_metadata,
-                                                       stride, common_term, coords_input_io_spec, vectors_output_io_spec, magnitudes_output_io_spec)
+                                                       stride, common_term, dipole_unit, coords_input_io_spec, vectors_output_io_spec, magnitudes_output_io_spec)
                     results.append(result)
                     if result['success']:
                         successful_files += 1
@@ -530,7 +546,7 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
         for i in actual_dcd_list:
             result = _process_single_dipole_file(i, baseDir, coords_pattern,
                                                output_pattern, magnitudes_pattern, dipole_metadata,
-                                               stride, common_term, coords_input_io_spec, vectors_output_io_spec, magnitudes_output_io_spec)
+                                               stride, common_term, dipole_unit, coords_input_io_spec, vectors_output_io_spec, magnitudes_output_io_spec)
             results.append(result)
             
             if result['success']:

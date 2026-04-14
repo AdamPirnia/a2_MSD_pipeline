@@ -104,7 +104,8 @@ Current behavior highlights:
 
 - velocity extraction is controlled by `Target Selection` together with `Grouping Unit`
 - velocity extraction does not use a module-level particle-count field
-- individual dipole calculations are driven by `PSF Pattern`, `Target Selection`, `VMD Path`, and `Grouping Unit`
+- dipole calculations share `PSF Pattern`, `Target Selection`, `VMD Path`, `Stride`, and `Dipole Unit`
+- individual dipole calculations add `Grouping Unit` on top of those shared fields
 - stride control is available for velocity extraction and individual dipole calculations
 - individual dipole magnitude output is optional
 - individual dipole groups do not need to have the same number of atoms
@@ -112,10 +113,10 @@ Current behavior highlights:
 Typical outputs and units:
 
 - COM velocities: same velocity unit as the input velocity trajectory
-- individual dipole vectors: Debye
-- individual dipole magnitudes: Debye
-- collective dipole magnitude: Debye
-- collective dipole vector components: VMD internal dipole units (Debye or e·Å)
+- individual dipole vectors: selected `Dipole Unit` (`Debye` or `e·Å`)
+- individual dipole magnitudes: selected `Dipole Unit`
+- collective dipole vector components: selected `Dipole Unit`
+- collective dipole magnitude: selected `Dipole Unit`
 
 ### 3. MSD and NGP / Anisotropic NGP
 This module generates workflows for:

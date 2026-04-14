@@ -398,20 +398,21 @@ This workflow can generate either individual dipole scripts or collective dipole
 Field:
 
 - `Calculation Method`: choose `individual` or `collective`
+- `PSF Pattern`: full input `path + filename + extension` pattern for the PSF used by both dipole methods
+- `Target Selection`: VMD atom selection defining the atoms included in dipole calculations
+- `VMD Path`: full path to the VMD executable
+- `Stride`: frame sampling stride used by both individual and collective dipole calculations
+- `Dipole Unit`: output dipole unit, either `Debye` or `e·Å`
+- `DCD Selection (optional)`: optional subset of DCD indices to process
 
 ### If `Calculation Method = individual`
 
 Use these fields:
 
 - `Coordinates Pattern`: full input `path + filename + extension` pattern for coordinate files
-- `PSF Pattern`: full input `path + filename + extension` pattern for the PSF used to resolve masses, charges, and grouping
-- `Target Selection`: VMD atom selection defining the atoms included in individual dipole calculations
-- `VMD Path`: full path to the VMD executable
 - `Grouping Unit`: grouping used to define each individual dipole, currently `residue`, `chain`, or `segname`
 - `Dipole Vectors Pattern`: full output `path + filename + extension` pattern for dipole-vector files
 - `Magnitudes Pattern`: optional full output `path + filename + extension` pattern for dipole-magnitude files
-- `Stride`: frame sampling stride for individual dipole calculation
-- `DCD Selection (optional)`: optional subset of DCD indices to process
 - checkbox next to `Magnitudes Pattern`: enables or disables dipole-magnitude calculation and saving
 
 What it does:
@@ -424,8 +425,8 @@ What it does:
 
 Output units:
 
-- dipole vector files are written in Debye
-- dipole magnitude files are written in Debye when enabled
+- dipole vector files are written in the selected `Dipole Unit`
+- dipole magnitude files are written in the selected `Dipole Unit` when enabled
 
 How individual molecules are distinguished:
 
@@ -445,13 +446,8 @@ Important input note:
 
 Use these fields:
 
-- `Trajectory Pattern`: full input `path + filename + extension` pattern used for collective dipole analysis when applicable
-- `PSF Pattern`: full input `path + filename + extension` pattern for collective dipole analysis
 - `DCD Pattern`: full input `path + filename + extension` pattern for collective dipole analysis
 - `Output Pattern`: full output `path + filename + extension` pattern for the collective dipole result
-- `Target Selection`: VMD atom selection defining the group whose collective dipole will be computed
-- `VMD Path`: full path to the VMD executable
-- `DCD Selection (optional)`: optional subset of DCD indices to process
 
 What it does:
 
@@ -461,14 +457,14 @@ What it does:
 
 Notes:
 
-- both individual and collective fields are visible in the tab, but the selected `Calculation Method` determines which workflow the generated script uses
+- shared fields stay active regardless of `Calculation Method`
+- method-specific fields are grouped at the top of the dipole section
 - `Skip` disables the dipole block entirely
 
 Output units:
 
 - the collective output file contains frame index, dipole vector components, and dipole magnitude
-- the dipole magnitude is in Debye
-- the vector components use the dipole unit returned by VMD for the collective vector output
+- both vector components and magnitude are written in the selected `Dipole Unit`
 
 ## Module 3: MSD and NGP / Anisotropic NGP
 

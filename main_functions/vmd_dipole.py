@@ -9,7 +9,8 @@ try:
 except ImportError:
     from numeric_io import load_numeric_array, save_numeric_array
 
-def vmd_dipole_collective(baseDir, INdir, OUTdir, psf, dcd, num_dcd, target, vmd, max_workers=None, dcd_indices=None, neutral=False, output_pattern=None, output_io_spec=None):
+def vmd_dipole_collective(baseDir, psf, dcd, num_dcd, target, vmd, stride=1, dipole_unit="e·Å",
+                          max_workers=None, dcd_indices=None, neutral=False, output_pattern=None, output_io_spec=None):
     """
     Calculates collective dipole moments from a series of DCD trajectories using VMD in parallel.
     
@@ -33,12 +34,6 @@ def vmd_dipole_collective(baseDir, INdir, OUTdir, psf, dcd, num_dcd, target, vmd
     baseDir : str
         Root directory containing the `INdir` subfolders named
         "0to1ns", "1to2ns", … up to `num_dcd-1`to`num_dcd`ns.
-    INdir : str
-        Name of the subfolder under `baseDir` where all trajectory chunks live.
-    OUTdir : str
-        Name of the output subdirectory under `baseDir` in which results will be 
-        created as the `.dat` files. OUTdir will be created if it does not exist.
-        (Used when output_pattern is None for backward compatibility)
     psf : str
         Base filename (+path between OUTdir and the file without extension) of the 
         topology file in each chunk (e.g. `"system"` if your files are `system.psf`).
@@ -56,6 +51,10 @@ def vmd_dipole_collective(baseDir, INdir, OUTdir, psf, dcd, num_dcd, target, vmd
         "segname PROT and backbone", "index 0 to 999").
     vmd : str
         The path to the VMD executable.
+    stride : int, optional
+        Process every Nth frame. Default is 1.
+    dipole_unit : str, optional
+        Output unit for vector components and magnitudes. Either `e·Å` or `Debye`.
     max_workers : int, optional
         Maximum number of parallel workers. Defaults to min(num_dcd, CPU count).
     dcd_indices : list, optional
@@ -109,8 +108,12 @@ def vmd_dipole_collective(baseDir, INdir, OUTdir, psf, dcd, num_dcd, target, vmd
         raise ValueError("DCD pattern is required for collective dipole calculation")
     if not str(target or "").strip():
         raise ValueError("Target selection is required for collective dipole calculation")
-    if not str(output_pattern or OUTdir or "").strip():
+    if not str(output_pattern or "").strip():
         raise ValueError("Output pattern is required for collective dipole calculation")
+    if int(stride) < 1:
+        raise ValueError("Stride must be at least 1 for collective dipole calculation")
+    if dipole_unit not in {"Debye", "e·Å"}:
+        raise ValueError("Dipole unit must be either 'Debye' or 'e·Å'")
     
     # Create output directories - handle both pattern and legacy formats
     if output_pattern:
@@ -124,10 +127,6 @@ def vmd_dipole_collective(baseDir, INdir, OUTdir, psf, dcd, num_dcd, target, vmd
         output_dir = os.path.dirname(os.path.join(baseDir, first_output))
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
-    else:
-        # Legacy approach for backward compatibility
-        os.makedirs(f'{baseDir}/{OUTdir}', exist_ok=True)
-    
     os.makedirs('writenCodes', exist_ok=True)
     os.makedirs('logs', exist_ok=True)
     
@@ -144,10 +143,12 @@ def vmd_dipole_collective(baseDir, INdir, OUTdir, psf, dcd, num_dcd, target, vmd
     print(f"Processing DCDs: {dcd_list}")
     print(f"Using {max_workers} parallel workers for {len(dcd_list)} trajectory chunks...")
     print(f"Neutral dipole handling: {'enabled' if neutral else 'disabled'}")
+    print(f"Stride: {stride}")
+    print(f"Dipole unit: {dipole_unit}")
     
     # Generate all TCL scripts first with pattern validation
     for i in dcd_list:
-        success = _write_dipole_tcl_script(i, baseDir, INdir, OUTdir, psf, dcd, target, neutral, output_pattern)
+        success = _write_dipole_tcl_script(i, baseDir, psf, dcd, target, stride, dipole_unit, neutral, output_pattern)
         if not success:
             print(f"ERROR: Failed to generate TCL script for dipole chunk {i} due to pattern validation failure.")
             print("Please fix the corrupted patterns in your GUI input fields and try again.")
@@ -198,7 +199,7 @@ def vmd_dipole_collective(baseDir, INdir, OUTdir, psf, dcd, num_dcd, target, vmd
     return results
 
 
-def _write_dipole_tcl_script(i, baseDir, INdir, OUTdir, psf, dcd, target, neutral=False, output_pattern=None):
+def _write_dipole_tcl_script(i, baseDir, psf, dcd, target, stride=1, dipole_unit="e·Å", neutral=False, output_pattern=None):
     """Write optimized TCL script for collective dipole moment calculation."""
     
     # Validate patterns to ensure they match user input expectations
@@ -243,7 +244,6 @@ def _write_dipole_tcl_script(i, baseDir, INdir, OUTdir, psf, dcd, target, neutra
     except ImportError:
         from path_utils import expand_path_pattern
 
-    traj_path = expand_path_pattern(INdir, "", i)
     psf_path = expand_path_pattern(psf, "", i)
     dcd_path = expand_path_pattern(dcd, "", i)
 
@@ -258,14 +258,11 @@ def _write_dipole_tcl_script(i, baseDir, INdir, OUTdir, psf, dcd, target, neutra
             return False
         
         output_full_path = os.path.join(baseDir, output_path)
-    else:
-        # Legacy format for backward compatibility
-        output_full_path = f"{baseDir}/{OUTdir}/dipole_{i}.dat"
-
-    traj_full_path = os.path.join(baseDir, traj_path) if traj_path else baseDir
     psf_full_path = os.path.join(baseDir, psf_path)
     dcd_full_path = os.path.join(baseDir, dcd_path)
     dipole_center_option = "-geocenter" if neutral else "-masscenter"
+    dipole_unit_option = " -debye" if dipole_unit == "Debye" else ""
+    header_unit = "Debye" if dipole_unit == "Debye" else "e·Å"
     
     if not os.path.exists(psf_full_path):
         raise FileNotFoundError(_format_missing_file_message("PSF", psf_full_path))
@@ -283,7 +280,6 @@ puts "Timestamp: [clock format [clock seconds]]"
 set outfile [open "{_tcl_quote(output_full_path)}" w]
 
 # Load trajectory
-set trajDir "{_tcl_quote(traj_full_path)}"
 set PSF "{_tcl_quote(psf_full_path)}"
 set DCD "{_tcl_quote(dcd_full_path)}"
 
@@ -312,16 +308,16 @@ if {{$natoms == 0}} {{
 puts $outfile "# Collective dipole moment calculation"
 puts $outfile "# Selection: {target} ($natoms atoms)"
 puts $outfile "# Neutral handling: {'geometric center' if neutral else 'center of mass'}"
-puts $outfile "# Format: frame dipole_x dipole_y dipole_z magnitude_debye"
+puts $outfile "# Format: frame dipole_x dipole_y dipole_z magnitude_{header_unit}"
 
 # Process each frame efficiently
-for {{set frame 0}} {{$frame < $nframes}} {{incr frame}} {{
+for {{set frame 0}} {{$frame < $nframes}} {{incr frame {int(stride)}}} {{
     # Update selection to current frame
     $sel frame $frame
     
     # Calculate dipole moment vector and magnitude
-    set mu_vector [measure dipole $sel {dipole_center_option}]
-    set mu_magnitude [veclength [measure dipole $sel {dipole_center_option} -debye]]
+    set mu_vector [measure dipole $sel {dipole_center_option}{dipole_unit_option}]
+    set mu_magnitude [veclength $mu_vector]
     
     # Extract individual components
     set mu_x [lindex $mu_vector 0]
