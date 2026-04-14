@@ -104,10 +104,10 @@ Current behavior highlights:
 
 - velocity extraction is controlled by `Target Selection` together with `Grouping Unit`
 - velocity extraction does not use a module-level particle-count field
-- individual dipole calculations use their own `Number of particles` field
+- individual dipole calculations are driven by `PSF Pattern`, `Target Selection`, `VMD Path`, and `Grouping Unit`
 - stride control is available for velocity extraction and individual dipole calculations
 - individual dipole magnitude output is optional
-- individual dipole workflows assume atoms are ordered in consistent repeating blocks, such as `O H H | O H H | ...`
+- individual dipole groups do not need to have the same number of atoms
 
 Typical outputs and units:
 

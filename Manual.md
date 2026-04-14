@@ -404,21 +404,21 @@ Field:
 Use these fields:
 
 - `Coordinates Pattern`: full input `path + filename + extension` pattern for coordinate files
-- `COM Pattern`: full input `path + filename + extension` pattern for COM files
+- `PSF Pattern`: full input `path + filename + extension` pattern for the PSF used to resolve masses, charges, and grouping
+- `Target Selection`: VMD atom selection defining the atoms included in individual dipole calculations
+- `VMD Path`: full path to the VMD executable
+- `Grouping Unit`: grouping used to define each individual dipole, currently `residue`, `chain`, or `segname`
 - `Dipole Vectors Pattern`: full output `path + filename + extension` pattern for dipole-vector files
 - `Magnitudes Pattern`: optional full output `path + filename + extension` pattern for dipole-magnitude files
-- `Atomic charges`: comma-separated atomic charges for one molecule
-- `Atoms per molecule`: number of atoms in each molecule
-- `Number of particles`: number of molecules represented in the dipole input files
 - `Stride`: frame sampling stride for individual dipole calculation
 - `DCD Selection (optional)`: optional subset of DCD indices to process
-- `Neutral molecule(s)`: indicates that the molecules are neutral and the calculation should treat them accordingly
 - checkbox next to `Magnitudes Pattern`: enables or disables dipole-magnitude calculation and saving
 
 What it does:
 
-- loads coordinate data for each molecule
-- uses the supplied charges
+- resolves atom masses, charges, and group membership from the PSF and target selection
+- loads atomic coordinate data for the selected atoms
+- computes one dipole vector per resolved group for each frame
 - always computes dipole vectors for each frame
 - computes and saves dipole magnitudes only if the `Magnitudes Pattern` checkbox is enabled
 
@@ -429,21 +429,17 @@ Output units:
 
 How individual molecules are distinguished:
 
-- this workflow assumes the atomic coordinates are ordered molecule-by-molecule in a consistent repeating pattern
-- `Atoms per molecule` tells the software how many consecutive atoms belong to one molecule
-- `Atomic charges` are applied to each molecule using that same atom order
-- the first `Atoms per molecule` atoms are treated as molecule 1, the next block as molecule 2, and so on
-
-Example:
-
-- if each water molecule is stored as `O H H`, use `Atoms per molecule = 3`
-- the software interprets the coordinates as `(O,H,H)`, `(O,H,H)`, `(O,H,H)`, ...
+- this workflow groups atoms using `Grouping Unit`
+- if `Grouping Unit = residue`, one dipole is computed for each residue inside the final selection
+- if `Grouping Unit = chain`, one dipole is computed for each chain inside the final selection
+- groups do not need to have the same number of atoms
+- selections such as `same residue as ...` are interpreted by VMD before dipoles are computed
 
 Important input note:
 
 - `Coordinates Pattern` must point to per-atom coordinates, for example `xyz` or `unwr_xyz`
 - do not use COM-coordinate files such as `com_xyz` as the dipole coordinate input
-- if the atom ordering in the coordinate file does not follow the expected repeating per-molecule pattern, the dipole grouping will be wrong
+- the coordinate file must match the atom selection resolved from the PSF
 
 ### If `Calculation Method = collective`
 
