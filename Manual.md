@@ -97,6 +97,7 @@ Do not rely on:
 Platform guidance:
 
 - macOS: use the real path from inside the VMD application bundle rather than an alias such as `vmd`
+- macOS: if extraction produces zero-byte `.rawf32` / `.shape` files, do not use `startup.command.csh`; use the actual VMD executable inside the app bundle
 - Windows: use the actual `vmd.exe` path rather than a shortcut or non-executable launcher entry
 
 Generic examples:
@@ -290,13 +291,17 @@ Use `auto` for `Chunk Size` when you want the software to choose a safe value, o
 ## Step 3: COM calculation
 
 This step computes center-of-mass trajectories from the continuous coordinates.
+Step 3 now has its own metadata inputs and does not inherit PSF / selection / VMD settings from Step 1.
 
 Fields:
 
 - `Input Pattern`: full input `path + filename + extension` pattern for continuous-coordinate files from Step 2
 - `Output Pattern`: full output `path + filename + extension` pattern for generated COM files
-- `Atoms per particle`: number of atoms in each molecule or particle
-- `Mass list`: comma-separated atomic masses in the same order used in each molecule
+- `PSF Pattern`: PSF file pattern used to resolve atom masses and topology grouping for the COM calculation
+- `Target Selection`: atom selection defining which atoms participate in the COM calculation
+- `VMD Path`: VMD executable used to interpret the selection and PSF topology metadata
+- `COM Mode`: choose `individual` or `collective`
+- `Grouping Unit`: used only in `individual` mode; currently `residue`, `chain`, or `segname`
 - `DCD Selection (optional)`: optional subset of DCD indices to process
 
 Options:
@@ -306,21 +311,28 @@ Options:
 
 What this section does:
 
-- groups atoms into molecules or particles
-- applies the supplied masses
+- resolves the selected atoms from the PSF and target selection
+- obtains atom masses from the PSF
 - computes center-of-mass positions frame by frame
 
-How molecule or particle boundaries are determined:
+If `COM Mode = individual`:
 
-- this step assumes the atoms in each frame are ordered molecule-by-molecule in a consistent repeating pattern
-- `Atoms per particle` tells the software how many consecutive atoms belong to one molecule or particle
-- the first `Atoms per particle` atoms are treated as particle 1, the next block as particle 2, and so on
-- the `Mass list` must match that per-particle atom order
+- the software resolves the selected atoms and groups them using `Grouping Unit`
+- each resolved group gets its own COM per frame
+- groups do not need to have the same number of atoms
+- selections such as `same residue as ...` are interpreted by VMD before the COM calculation, so full residues/segments/chains can be pulled into the final selection if the selection syntax requests that behavior
 
-Example:
+Examples:
 
-- if water is stored as `O H H O H H ...`, then `Atoms per particle = 3`
-- the software groups atoms as `(O,H,H)`, `(O,H,H)`, `(O,H,H)`, ...
+- if `Grouping Unit = residue`, one COM is computed for each residue inside the final selection
+- if `Grouping Unit = chain`, one COM is computed for each chain inside the final selection
+- if the target selection is `same residue as resname TIP3 and index 10 to 90`, the final atom list follows VMD selection semantics before COMs are calculated
+
+If `COM Mode = collective`:
+
+- `Grouping Unit` is not used
+- all selected atoms are treated as one single group
+- one COM is computed per frame for the whole selection
 
 Output unit:
 

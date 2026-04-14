@@ -12,6 +12,7 @@ For any `VMD Path` field, enter the actual VMD executable path or an actual runn
 Platform notes:
 
 - macOS: use the real executable or launcher path from the VMD application bundle, not an alias such as `vmd` defined only in your interactive shell
+- macOS: if a trajectory-extraction step creates zero-byte `.rawf32` / `.shape` files, do not use `startup.command.csh`; use the actual VMD executable inside the app bundle
 - Windows: use the real `vmd.exe` path, not a desktop shortcut or a shell-only wrapper command
 
 Generic examples:

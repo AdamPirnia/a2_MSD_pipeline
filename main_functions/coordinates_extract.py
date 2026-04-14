@@ -164,6 +164,16 @@ def _finalize_binary_coordinate_output(output_file, output_io_spec):
     if not os.path.exists(shape_file):
         raise FileNotFoundError(f"Binary coordinate shape metadata not found: {shape_file}")
 
+    raw_size = os.path.getsize(raw_output_file)
+    shape_size = os.path.getsize(shape_file)
+    if raw_size <= 0 or shape_size <= 0:
+        raise ValueError(
+            "VMD completed without writing coordinate payload data. "
+            f"raw bytes={raw_size}, shape bytes={shape_size}. "
+            "This usually means the VMD launcher exited without running the Tcl batch script correctly. "
+            "On macOS, prefer the real VMD executable inside the app bundle instead of startup.command.csh."
+        )
+
     with open(shape_file, "r", encoding="utf-8") as handle:
         shape_tokens = handle.read().strip().split()
     if len(shape_tokens) != 2:
