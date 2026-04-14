@@ -95,8 +95,11 @@ This module generates workflows for:
 
 Current behavior highlights:
 
-- velocity extraction uses the module-level `Number of Particles` setting
+- velocity extraction is controlled by `Target Selection` together with `Grouping Unit`
+- velocity extraction does not use a module-level particle-count field
+- individual dipole calculations use their own `Number of particles` field
 - stride control is available for velocity extraction and individual dipole calculations
+- individual dipole magnitude output is optional
 - individual dipole workflows assume atoms are ordered in consistent repeating blocks, such as `O H H | O H H | ...`
 
 Typical outputs and units:
@@ -147,14 +150,18 @@ It supports:
 - vector-vector correlation
 - single-variable mode
 - multiple-variable mode averaged across variables
-- `acf` mode with mean subtraction
-- `fluctuation` mode without mean subtraction
+- `Subtracting Mean` mode with mean subtraction
+- `Not Subtracting Mean` mode without mean subtraction
 
-The reported correlation values are not normalized by the `t = 0` correlation.
+Current behavior highlights:
+
+- the reported correlation function is written as `C(t)/C(0)`
+- the separate variance output stores `C(0) * Coefficient^2`
+- `Step (between frames)` determines the unit of the horizontal axis, such as time
 
 Typical outputs and units:
 
-- time column: same time unit as `Time per Lag (t1)`
+- time column: same unit implied by `Step (between frames)`
 - correlation column: product of the units of the two input arrays
 
 ### 5. Diffusion constant

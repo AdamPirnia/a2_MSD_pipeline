@@ -31,7 +31,7 @@ def _load_array(input_file, dtype=np.float64, io_spec=None):
     return np.asarray(data, dtype=dtype)
 
 
-def dipoleM(coords, charges, com, atoms_per_mol, num_molecules_to_calc, chunk_size=None, neutral=False):
+def dipoleM(coords, charges, com, atoms_per_mol, num_molecules_to_calc, chunk_size=None, neutral=False, calculate_magnitudes=True):
     """
     Calculate dipole moments for a set of molecular coordinates.
     
@@ -81,8 +81,9 @@ def dipoleM(coords, charges, com, atoms_per_mol, num_molecules_to_calc, chunk_si
         axis=2
     ) / DEBYE_CONVERSION
     
-    # Calculate dipole magnitudes
-    dipole_magnitudes = np.linalg.norm(dipole_vectors, axis=2)
+    dipole_magnitudes = None
+    if calculate_magnitudes:
+        dipole_magnitudes = np.linalg.norm(dipole_vectors, axis=2)
     
     return dipole_vectors, dipole_magnitudes
 
@@ -175,33 +176,30 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, com_pattern, 
             print(f"  Calling dipoleM with shapes: coords {coord_data.shape}, charges {charges_array.shape}, com skipped (neutral)")
         else:
             print(f"  Calling dipoleM with shapes: coords {coord_data.shape}, charges {charges_array.shape}, com {com_reshaped.shape}")
+        calculate_magnitudes = bool(magnitudes_pattern)
         dipole_vectors, dipole_magnitudes = dipoleM(
-            coord_data, charges_array, com_reshaped, atoms_per_particle, effective_molecules, neutral=neutral
+            coord_data, charges_array, com_reshaped, atoms_per_particle, effective_molecules, neutral=neutral, calculate_magnitudes=calculate_magnitudes
         )
-        print(f"  dipoleM returned: vectors {dipole_vectors.shape}, magnitudes {dipole_magnitudes.shape}")
+        if calculate_magnitudes:
+            print(f"  dipoleM returned: vectors {dipole_vectors.shape}, magnitudes {dipole_magnitudes.shape}")
+        else:
+            print(f"  dipoleM returned: vectors {dipole_vectors.shape}, magnitudes skipped")
         
-        # Save results
+        # Save vector results, and magnitude results only when requested.
+        dipole_file = expand_path_pattern(output_pattern, common_term, file_idx)
+        dipole_path = os.path.join(baseDir, dipole_file)
+        os.makedirs(os.path.dirname(dipole_path), exist_ok=True)
+        magnitude_path = None
         if magnitudes_pattern:
-            dipole_file = expand_path_pattern(output_pattern, common_term, file_idx)
             magnitude_file = expand_path_pattern(magnitudes_pattern, common_term, file_idx)
-            
-            dipole_path = os.path.join(baseDir, dipole_file)
             magnitude_path = os.path.join(baseDir, magnitude_file)
-            
-            os.makedirs(os.path.dirname(dipole_path), exist_ok=True)
             if magnitude_path != dipole_path:
                 os.makedirs(os.path.dirname(magnitude_path), exist_ok=True)
-        else:
-            output_path = os.path.join(baseDir, expand_path_pattern(output_pattern, common_term, file_idx))
-            dipole_path = os.path.join(output_path, f'dipoles_{file_idx}.dat')
-            magnitude_path = os.path.join(output_path, f'dipole_magnitudes_{file_idx}.dat')
-            os.makedirs(output_path, exist_ok=True)
         
         # Reshape dipole vectors to match expected output format
         dipole_vectors_flat = dipole_vectors.reshape(n_frames, -1)
         
         print(f"  Saving to: {dipole_path}")
-        print(f"  Saving to: {magnitude_path}")
         save_numeric_array(
             dipole_path,
             dipole_vectors_flat,
@@ -209,13 +207,15 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, com_pattern, 
             default_mode="text",
             default_precision="double",
         )
-        save_numeric_array(
-            magnitude_path,
-            dipole_magnitudes,
-            magnitudes_output_io_spec,
-            default_mode="text",
-            default_precision="double",
-        )
+        if magnitude_path is not None:
+            print(f"  Saving to: {magnitude_path}")
+            save_numeric_array(
+                magnitude_path,
+                dipole_magnitudes,
+                magnitudes_output_io_spec,
+                default_mode="text",
+                default_precision="double",
+            )
 
         # Verify outputs immediately so binary/text mismatches fail here instead of later modules.
         load_numeric_array(
@@ -224,21 +224,24 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, com_pattern, 
             default_mode="text",
             default_precision="double",
         )
-        load_numeric_array(
-            magnitude_path,
-            magnitudes_output_io_spec,
-            default_mode="text",
-            default_precision="double",
-        )
+        if magnitude_path is not None:
+            load_numeric_array(
+                magnitude_path,
+                magnitudes_output_io_spec,
+                default_mode="text",
+                default_precision="double",
+            )
         
         print(f"  SUCCESS: File {file_idx} processed, {n_frames} frames")
-        return {
+        result = {
             'success': True, 
             'file_idx': file_idx, 
             'frames_processed': n_frames,
-            'mean_magnitude': np.mean(dipole_magnitudes),
-            'std_magnitude': np.std(dipole_magnitudes)
         }
+        if dipole_magnitudes is not None:
+            result['mean_magnitude'] = np.mean(dipole_magnitudes)
+            result['std_magnitude'] = np.std(dipole_magnitudes)
+        return result
         
     except Exception as e:
         import traceback
@@ -419,9 +422,12 @@ def dipole_functions(baseDir, coords_pattern, com_pattern, output_pattern, Charg
                         successful_files += 1
                         successful_indices.append(result['file_idx'])
                         total_frames += result['frames_processed']
-                        quality_metrics['mean_magnitudes'].append(result['mean_magnitude'])
-                        quality_metrics['std_magnitudes'].append(result['std_magnitude'])
-                        print(f"✓ File {result['file_idx']}: {result['frames_processed']} frames, avg magnitude: {result['mean_magnitude']:.3f} D")
+                        if 'mean_magnitude' in result:
+                            quality_metrics['mean_magnitudes'].append(result['mean_magnitude'])
+                            quality_metrics['std_magnitudes'].append(result['std_magnitude'])
+                            print(f"✓ File {result['file_idx']}: {result['frames_processed']} frames, avg magnitude: {result['mean_magnitude']:.3f} D")
+                        else:
+                            print(f"✓ File {result['file_idx']}: {result['frames_processed']} frames")
                     else:
                         failed_results.append(result)
                         print(f"✗ File {result['file_idx']}: {result['error']}")
@@ -443,9 +449,12 @@ def dipole_functions(baseDir, coords_pattern, com_pattern, output_pattern, Charg
                         successful_files += 1
                         successful_indices.append(result['file_idx'])
                         total_frames += result['frames_processed']
-                        quality_metrics['mean_magnitudes'].append(result['mean_magnitude'])
-                        quality_metrics['std_magnitudes'].append(result['std_magnitude'])
-                        print(f"✓ File {result['file_idx']}: {result['frames_processed']} frames, avg magnitude: {result['mean_magnitude']:.3f} D")
+                        if 'mean_magnitude' in result:
+                            quality_metrics['mean_magnitudes'].append(result['mean_magnitude'])
+                            quality_metrics['std_magnitudes'].append(result['std_magnitude'])
+                            print(f"✓ File {result['file_idx']}: {result['frames_processed']} frames, avg magnitude: {result['mean_magnitude']:.3f} D")
+                        else:
+                            print(f"✓ File {result['file_idx']}: {result['frames_processed']} frames")
                     else:
                         failed_results.append(result)
                         print(f"✗ File {result['file_idx']}: {result['error']}")
@@ -466,9 +475,12 @@ def dipole_functions(baseDir, coords_pattern, com_pattern, output_pattern, Charg
                 successful_files += 1
                 successful_indices.append(result['file_idx'])
                 total_frames += result['frames_processed']
-                quality_metrics['mean_magnitudes'].append(result['mean_magnitude'])
-                quality_metrics['std_magnitudes'].append(result['std_magnitude'])
-                print(f"✓ File {result['file_idx']}: {result['frames_processed']} frames, avg magnitude: {result['mean_magnitude']:.3f} D")
+                if 'mean_magnitude' in result:
+                    quality_metrics['mean_magnitudes'].append(result['mean_magnitude'])
+                    quality_metrics['std_magnitudes'].append(result['std_magnitude'])
+                    print(f"✓ File {result['file_idx']}: {result['frames_processed']} frames, avg magnitude: {result['mean_magnitude']:.3f} D")
+                else:
+                    print(f"✓ File {result['file_idx']}: {result['frames_processed']} frames")
             else:
                 failed_results.append(result)
                 print(f"✗ File {result['file_idx']}: {result['error']}")

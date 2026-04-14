@@ -98,8 +98,11 @@ def _scalar_single_correlation(
     def corr_at_lag(lag: int) -> float:
         return float(np.mean(arr1[: arr1.shape[0] - lag : delta] * arr2[lag::delta]))
 
-    variance = corr_at_lag(0)
-    values = np.array([corr_at_lag(lag) for lag in range(max_lag + 1)], dtype=np.float64)
+    raw_values = np.array([corr_at_lag(lag) for lag in range(max_lag + 1)], dtype=np.float64)
+    variance = float(raw_values[0])
+    if variance == 0.0:
+        raise ValueError("C(0) is zero; cannot normalize correlation function")
+    values = raw_values / variance
     times = np.arange(max_lag + 1, dtype=np.float64) * float(t1)
     return variance, np.column_stack((times, values))
 
@@ -122,12 +125,14 @@ def _scalar_multiple_correlation(
     def corr_at_lag(lag: int) -> np.ndarray:
         return np.mean(arr1[: arr1.shape[0] - lag : delta, :] * arr2[lag::delta, :], axis=0)
 
-    variance_per_variable = corr_at_lag(0)
-    variance = float(np.mean(variance_per_variable))
-    values = np.array(
+    raw_values = np.array(
         [np.mean(corr_at_lag(lag)) for lag in range(max_lag + 1)],
         dtype=np.float64,
     )
+    variance = float(raw_values[0])
+    if variance == 0.0:
+        raise ValueError("C(0) is zero; cannot normalize correlation function")
+    values = raw_values / variance
     times = np.arange(max_lag + 1, dtype=np.float64) * float(t1)
     return variance, np.column_stack((times, values))
 
@@ -152,9 +157,11 @@ def _vector_single_correlation(
         products = np.einsum("ij,ij->i", arr1[: arr1.shape[0] - lag : delta], arr2[lag::delta])
         return float(np.mean(products))
 
-    variance = corr_at_lag(0)
-    scale = float(coef) / 3.0
-    values = np.array([scale * corr_at_lag(lag) for lag in range(max_lag + 1)], dtype=np.float64)
+    raw_values = np.array([corr_at_lag(lag) for lag in range(max_lag + 1)], dtype=np.float64)
+    variance = float(raw_values[0])
+    if variance == 0.0:
+        raise ValueError("C(0) is zero; cannot normalize correlation function")
+    values = raw_values / variance
     times = np.arange(max_lag + 1, dtype=np.float64) * float(t1)
     return variance, np.column_stack((times, values))
 
@@ -179,13 +186,14 @@ def _vector_multiple_correlation(
         products = np.einsum("ijk,ijk->ij", arr1[: arr1.shape[0] - lag : delta], arr2[lag::delta])
         return np.mean(products, axis=0)
 
-    variance_per_vector = corr_at_lag(0)
-    variance = float(np.mean(variance_per_vector))
-    scale = float(coef) / 3.0
-    values = np.array(
-        [scale * np.mean(corr_at_lag(lag)) for lag in range(max_lag + 1)],
+    raw_values = np.array(
+        [np.mean(corr_at_lag(lag)) for lag in range(max_lag + 1)],
         dtype=np.float64,
     )
+    variance = float(raw_values[0])
+    if variance == 0.0:
+        raise ValueError("C(0) is zero; cannot normalize correlation function")
+    values = raw_values / variance
     times = np.arange(max_lag + 1, dtype=np.float64) * float(t1)
     return variance, np.column_stack((times, values))
 
@@ -253,6 +261,7 @@ def calculate_correlation_from_files(
     array1_pattern: str,
     array2_pattern: str,
     output_pattern: str,
+    variance_output_pattern: str,
     num_dcd: int,
     delta: int,
     max_lag: int,
@@ -271,8 +280,8 @@ def calculate_correlation_from_files(
 ) -> dict[str, Any]:
     if not baseDir:
         raise ValueError("baseDir is required")
-    if not array1_pattern or not array2_pattern or not output_pattern:
-        raise ValueError("array1_pattern, array2_pattern, and output_pattern are required")
+    if not array1_pattern or not array2_pattern or not output_pattern or not variance_output_pattern:
+        raise ValueError("array1_pattern, array2_pattern, output_pattern, and variance_output_pattern are required")
 
     indices = list(range(int(num_dcd))) if dcd_indices is None else [int(i) for i in dcd_indices]
     subtract_mean = str(acf_mode).strip().lower() == "acf"
@@ -285,6 +294,7 @@ def calculate_correlation_from_files(
         array1_file = os.path.join(baseDir, _expand_pattern(array1_pattern, index, common_term))
         array2_file = os.path.join(baseDir, _expand_pattern(array2_pattern, index, common_term))
         output_file = os.path.join(baseDir, _expand_pattern(output_pattern, index, common_term))
+        variance_output_file = os.path.join(baseDir, _expand_pattern(variance_output_pattern, index, common_term))
 
         try:
             array1 = load_numeric_array(
@@ -318,8 +328,16 @@ def calculate_correlation_from_files(
                 default_mode="text",
                 default_precision="double",
             )
+            scaled_variance = float(variance) * float(coef) ** 2
+            save_numeric_array(
+                variance_output_file,
+                np.array([[scaled_variance]], dtype=np.float64),
+                output_io_spec,
+                default_mode="text",
+                default_precision="double",
+            )
             successful.append(output_file)
-            variances[index] = variance
+            variances[index] = scaled_variance
         except Exception as exc:
             failed.append({"index": index, "error": str(exc), "array1_file": array1_file, "array2_file": array2_file})
 

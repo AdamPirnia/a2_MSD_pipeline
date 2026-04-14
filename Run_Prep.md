@@ -166,6 +166,12 @@ What these checks do:
 - `python -c "import ..."`
   confirms that the required Python packages import successfully
 
+macOS note for generated analysis scripts:
+
+- On macOS, first try `python3 your_generated_script.py`.
+- If you get `ModuleNotFoundError` such as missing `numpy`, `scipy`, `pandas`, `PySide6`, or similar, run the script with `python your_generated_script.py` instead.
+- If `python` works and `python3` does not, your active environment is attached to `python` but not to `python3`.
+
 When the environment is active, your shell prompt usually starts with `(admdyn)`.
 
 To leave the environment later:

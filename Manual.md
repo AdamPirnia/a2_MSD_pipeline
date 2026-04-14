@@ -339,7 +339,6 @@ You can enable either one or both, depending on the scripts you want to generate
 
 - `Base Directory`: root folder for inputs and outputs
 - `Number of DCDs`: total number of trajectory segments
-- `Number of Particles`: number of molecules or particles in the system
 - `Common Terms`: two optional shared replacement fields for `*` and `**` in patterns
 - `Max Workers`: maximum CPU workers to use
 
@@ -352,20 +351,17 @@ Fields:
 - `PSF Pattern`: pattern for the PSF files
 - `VELDCD Pattern`: pattern for velocity-trajectory files
 - `Output Pattern`: full output `path + filename + extension` pattern for generated velocity files
+- `Target Selection`: VMD atom-selection string for the atoms whose COM velocities should be extracted
+- `Grouping Unit`: grouping used to define each COM velocity, currently `residue`, `chain`, or `segname`
 - `Stride`: frame sampling stride for velocity extraction
 - `VMD Executable Path`: full path to the VMD executable
 - `DCD Selection (optional)`: optional subset of DCD indices to process
 
 Notes:
 
-- this workflow uses the module-level `Number of Particles` value from `Common Parameters`
-- there is no separate velocity-only molecule-count input
-
-How molecule or particle boundaries are determined:
-
-- the velocity workflow assumes the velocity trajectory follows the same particle ordering as the structure
-- `Number of Particles` tells the workflow how many molecule or residue COM velocities to extract
-- the VMD script computes one center-of-mass velocity per particle/residue in that ordering
+- this workflow does not use a module-level `Number of Particles` field
+- VMD determines which atoms are included from `Target Selection`
+- `Grouping Unit` tells the workflow how those selected atoms are grouped into COM velocities
 - for correct results, the PSF and velocity trajectory must describe the same system ordering
 
 What this section does:
@@ -393,23 +389,26 @@ Use these fields:
 - `Coordinates Pattern`: full input `path + filename + extension` pattern for coordinate files
 - `COM Pattern`: full input `path + filename + extension` pattern for COM files
 - `Dipole Vectors Pattern`: full output `path + filename + extension` pattern for dipole-vector files
-- `Dipole Magnitudes Pattern`: full output `path + filename + extension` pattern for dipole-magnitude files
+- `Magnitudes Pattern`: optional full output `path + filename + extension` pattern for dipole-magnitude files
 - `Atomic charges`: comma-separated atomic charges for one molecule
 - `Atoms per molecule`: number of atoms in each molecule
+- `Number of particles`: number of molecules represented in the dipole input files
 - `Stride`: frame sampling stride for individual dipole calculation
 - `DCD Selection (optional)`: optional subset of DCD indices to process
 - `Neutral molecule(s)`: indicates that the molecules are neutral and the calculation should treat them accordingly
+- checkbox next to `Magnitudes Pattern`: enables or disables dipole-magnitude calculation and saving
 
 What it does:
 
 - loads coordinate data for each molecule
 - uses the supplied charges
-- computes dipole vectors and magnitudes for each frame
+- always computes dipole vectors for each frame
+- computes and saves dipole magnitudes only if the `Magnitudes Pattern` checkbox is enabled
 
 Output units:
 
 - dipole vector files are written in Debye
-- dipole magnitude files are written in Debye
+- dipole magnitude files are written in Debye when enabled
 
 How individual molecules are distinguished:
 
@@ -547,16 +546,16 @@ Fields:
 
 - `Array 1 Pattern`: full input `path + filename + extension` pattern for the first numeric array
 - `Array 2 Pattern`: full input `path + filename + extension` pattern for the second numeric array
-- `Output Pattern`: full output `path + filename + extension` pattern for the generated correlation results
-- `Lag Step (delta)`: frame or sample stride used in the correlation sum
-- `Maximum Lag`: largest lag index to evaluate
-- `Time per Lag (t1)`: physical time corresponding to one lag increment
-- `Vector Coefficient`: scaling factor used for vector-vector correlations; the standard choice is `3`
+- `Corr. Func. Output`: full output `path + filename + extension` pattern for the normalized correlation results
+- `Variance Output`: full output `path + filename + extension` pattern for the saved variance values
+- `Shift (delta)`: frame or sample stride used in the correlation sum
+- `Max Length (num. frames)`: largest lag index to evaluate
+- `Step (between frames)`: physical step associated with one frame increment
+- `Coefficient`: scaling factor used only for the saved variance output; the standard choice is `3`
 - `DCD Selection (optional)`: optional subset of indices to process
-- `Array 1 Type`: choose `scalar` or `vector`
-- `Array 2 Type`: choose `scalar` or `vector`
-- `Variable Count`: choose `single` or `multiple`
-- `Correlation Mode`: choose `acf` or `fluctuation`
+- `Data Type`: choose `scalar` or `vector`
+- `Particle Count`: choose `single` or `multiple`
+- `Correlation Function Mode`: choose `Subtracting Mean` or `Not Subtracting Mean`
 
 ## Precision
 
@@ -580,21 +579,21 @@ These settings control whether the generated script reads and writes text or bin
 - `single`: one scalar time series or one vector time series per file
 - `multiple`: many scalar variables or many vectors contained in the same file, averaged together in the final correlation
 
-### Correlation Mode
+### Correlation Function Mode
 
-- `acf`: subtracts the mean from each input before computing the correlation
-- `fluctuation`: computes the correlation directly from the raw input without subtracting the mean
+- `Subtracting Mean`: subtracts the mean from each input before computing the correlation
+- `Not Subtracting Mean`: computes the correlation directly from the raw input without subtracting the mean
 
 ### Correlation normalization
 
-The correlation module does not divide the output by the `t = 0` correlation value.
-
-- scalar and vector results are written as raw correlations
-- for vector-vector correlations, the `Vector Coefficient` still applies its usual scaling
+- the saved correlation function is normalized as `C(t)/C(0)`
+- the saved variance output stores `C(0) * Coefficient^2`
+- the `Coefficient` is not applied to the saved correlation-function curve itself
 
 Output units:
 
-- the first output column uses the same time unit as `Time per Lag (t1)`
+- the first output column uses the unit implied by `Step (between frames)`
+- `Step (between frames)` determines the unit of the horizontal axis, meaning the independent variable shown along the correlation-function x-axis, such as time
 - the second output column uses the product of the units of the two input arrays
 
 ## Current limitation
