@@ -80,6 +80,13 @@ This module prepares trajectory-derived data for downstream analysis. It include
 3. `COM calculation`
    Computes center-of-mass trajectories for molecules or coarse-grained units.
 
+Current COM behavior highlights:
+
+- Step 3 uses its own `PSF Pattern`, `Target Selection`, and `VMD Path`
+- `individual` mode computes one COM per resolved `Grouping Unit`
+- `collective` mode ignores `Grouping Unit` and computes one COM for the whole selection
+- individual COM groups do not need to have the same number of atoms
+
 Typical outputs and units:
 
 - extracted atomic coordinates: same length unit as the input trajectory coordinates
