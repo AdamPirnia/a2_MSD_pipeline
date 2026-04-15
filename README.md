@@ -105,7 +105,8 @@ Current behavior highlights:
 - velocity extraction is controlled by `Target Selection` together with `Grouping Unit`
 - velocity extraction does not use a module-level particle-count field
 - dipole calculations share `PSF Pattern`, `Target Selection`, `VMD Path`, `Stride`, and `Dipole Unit`
-- individual dipole calculations add `Grouping Unit` on top of those shared fields
+- individual dipole calculations add `Grouping Unit`, `All neutral particles`, and `COM Patterns` on top of those shared fields
+- if `All neutral particles` is unchecked, individual dipoles use one COM vector per resolved group and frame
 - stride control is available for velocity extraction and individual dipole calculations
 - individual dipole magnitude output is optional
 - individual dipole groups do not need to have the same number of atoms

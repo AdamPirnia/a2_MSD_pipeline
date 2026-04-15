@@ -45,6 +45,33 @@ def _load_array(input_file, dtype=np.float64, io_spec=None):
     return np.asarray(data, dtype=dtype)
 
 
+def _load_array_with_fallback(input_file, dtype=np.float64, io_spec=None):
+    """Load numeric data, falling back between binary NumPy and plain text when no explicit spec is provided."""
+    if io_spec is not None:
+        return _load_array(input_file, dtype=dtype, io_spec=io_spec)
+
+    try:
+        return np.asarray(
+            load_numeric_array(
+                input_file,
+                None,
+                default_mode="binary",
+                default_precision="single",
+            ),
+            dtype=dtype,
+        )
+    except Exception:
+        return np.asarray(
+            load_numeric_array(
+                input_file,
+                {"mode": "text", "precision": "single"},
+                default_mode="text",
+                default_precision="single",
+            ),
+            dtype=dtype,
+        )
+
+
 def _extract_selection_metadata(baseDir, psf_pattern, file_index, target_selection, grouping_unit, vmd_path, common_term=""):
     """Use VMD to resolve selected atoms, charges, masses, and grouping metadata for dipole calculations."""
     if grouping_unit not in {"residue", "chain", "segname"}:
@@ -194,12 +221,14 @@ def _compute_group_com_vectorized(atom_coords, metadata):
     return centers_of_mass
 
 
-def _compute_group_dipoles(atom_coords, metadata, dipole_unit="Debye", calculate_magnitudes=True):
+def _compute_group_dipoles(atom_coords, metadata, centers_of_mass=None, dipole_unit="Debye", calculate_magnitudes=True):
     """Compute dipole vectors and magnitudes for variable-size groups."""
-    centers_of_mass = _compute_group_com_vectorized(atom_coords, metadata)
-    com_per_atom = centers_of_mass[:, metadata["group_indices_all"], :]
-    relative_coords = atom_coords - com_per_atom
-    weighted = relative_coords * metadata["atom_charges"].reshape(1, -1, 1)
+    if centers_of_mass is None:
+        weighted = atom_coords * metadata["atom_charges"].reshape(1, -1, 1)
+    else:
+        com_per_atom = centers_of_mass[:, metadata["group_indices_all"], :]
+        relative_coords = atom_coords - com_per_atom
+        weighted = relative_coords * metadata["atom_charges"].reshape(1, -1, 1)
 
     dipole_vectors = np.zeros((atom_coords.shape[0], metadata["group_count"], 3), dtype=np.float64)
     for group_index in range(metadata["group_count"]):
@@ -220,7 +249,7 @@ def _compute_group_dipoles(atom_coords, metadata, dipole_unit="Debye", calculate
 
 def _process_single_dipole_file(file_idx, baseDir, coords_pattern, output_pattern,
                                 magnitudes_pattern, dipole_metadata,
-                                stride, common_term, dipole_unit,
+                                stride, common_term, dipole_unit, all_neutral, com_pattern,
                                 coords_input_io_spec=None,
                                 vectors_output_io_spec=None, magnitudes_output_io_spec=None):
     """Process a single trajectory file for dipole calculation - at module level for multiprocessing."""
@@ -241,15 +270,30 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, output_patter
             error_msg = f'Coordinate file not found: {coord_file}'
             print(f"  ERROR: {error_msg}")
             return {'success': False, 'error': error_msg, 'file_idx': file_idx}
+
+        com_data = None
+        if not all_neutral:
+            com_file_rel = expand_path_pattern(com_pattern, common_term, file_idx)
+            com_file = os.path.join(baseDir, com_file_rel)
+            print(f"  COM file: {com_file}")
+            if not os.path.exists(com_file):
+                error_msg = f'COM file not found: {com_file}'
+                print(f"  ERROR: {error_msg}")
+                return {'success': False, 'error': error_msg, 'file_idx': file_idx}
             
         # Load data
         print(f"  Loading data from files...")
         coord_data = _load_array(coord_file, dtype=np.float64, io_spec=coords_input_io_spec)
         print(f"  Loaded coords: {coord_data.shape}")
+        if not all_neutral:
+            com_data = _load_array_with_fallback(com_file, dtype=np.float64, io_spec=None)
+            print(f"  Loaded COMs: {com_data.shape}")
         
         # Apply stride if specified
         if stride > 1:
             coord_data = coord_data[::stride]
+            if com_data is not None:
+                com_data = com_data[::stride]
 
         expected_coord_cols = dipole_metadata["atom_count"] * 3
         actual_coord_cols = int(coord_data.shape[1]) if coord_data.ndim > 1 else 0
@@ -265,10 +309,28 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, output_patter
         atom_coords = coord_data.reshape(n_frames, dipole_metadata["atom_count"], 3)
         print(f"  Processing {n_frames} frames across {dipole_metadata['group_count']} dipole group(s)")
 
+        centers_of_mass = None
+        if not all_neutral:
+            expected_com_cols = dipole_metadata["group_count"] * 3
+            actual_com_cols = int(com_data.shape[1]) if com_data.ndim > 1 else 0
+            if actual_com_cols < expected_com_cols:
+                raise ValueError(
+                    f"COM input has {actual_com_cols} columns, but dipole calculation requires "
+                    f"{expected_com_cols} columns for {dipole_metadata['group_count']} groups."
+                )
+            if actual_com_cols > expected_com_cols:
+                com_data = com_data[:, :expected_com_cols]
+            if com_data.shape[0] != n_frames:
+                raise ValueError(
+                    f"COM input has {com_data.shape[0]} frames after stride, but coordinate input has {n_frames}."
+                )
+            centers_of_mass = com_data.reshape(n_frames, dipole_metadata["group_count"], 3)
+
         calculate_magnitudes = bool(magnitudes_pattern)
         dipole_vectors, dipole_magnitudes = _compute_group_dipoles(
             atom_coords,
             dipole_metadata,
+            centers_of_mass=centers_of_mass,
             dipole_unit=dipole_unit,
             calculate_magnitudes=calculate_magnitudes,
         )
@@ -341,8 +403,8 @@ def _process_single_dipole_file(file_idx, baseDir, coords_pattern, output_patter
         print(f"  ERROR: {error_details}")
         return {'success': False, 'error': error_details, 'file_idx': file_idx}
 
-def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd_path, grouping_unit,
-                    dipole_unit,
+def dipole_functions(baseDir, coords_pattern, com_pattern, psf_pattern, target_selection, vmd_path, grouping_unit,
+                    dipole_unit, all_neutral,
                     output_pattern, num_dcds, stride=1, max_workers=1, chunk_processing=True,
                     validate_data=True, progress_callback=None, common_term="",
                     magnitudes_pattern=None, dcd_indices=None,
@@ -358,6 +420,8 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
     coords_pattern : str  
         Path pattern for coordinate files. Can contain * (common term) and {i} (file index).
         Example: "anlz/NVT_*/unwrapped/continued_xyz_{i}.dat"
+    com_pattern : str | None
+        Path pattern for center-of-mass files used when the selected groups are not all neutral.
     psf_pattern : str
         Path pattern for PSF files used to resolve charges, masses, and grouping.
     target_selection : str
@@ -368,6 +432,8 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
         Grouping unit used to define individual dipoles. One of residue, chain, segname.
     dipole_unit : str
         Output dipole unit. One of Debye or e·Å.
+    all_neutral : bool
+        If True, do not subtract centers of mass. Use only when each selected group has zero net charge.
     output_pattern : str
         Path pattern for output vector files OR output directory (backward compatibility).
         If magnitudes_pattern is None, treated as directory. Otherwise, treated as vector file pattern.
@@ -404,6 +470,10 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
     is_valid, error_msg = validate_path_pattern(coords_pattern)
     if not is_valid:
         raise ValueError(f"Invalid coords pattern: {error_msg}")
+    if not all_neutral:
+        is_valid, error_msg = validate_path_pattern(com_pattern or "")
+        if not is_valid:
+            raise ValueError(f"Invalid COM pattern: {error_msg}")
 
     is_valid, error_msg = validate_path_pattern(psf_pattern)
     if not is_valid:
@@ -442,6 +512,10 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
     print(f"{'='*50}")
     print(f"Base directory: {baseDir}")
     print(f"Coords pattern: {coords_pattern}")
+    if all_neutral:
+        print("COM pattern: skipped (all selected groups marked neutral)")
+    else:
+        print(f"COM pattern: {com_pattern}")
     print(f"PSF pattern: {psf_pattern}")
     print(f"Target selection: {target_selection}")
     print(f"Grouping unit: {grouping_unit}")
@@ -491,7 +565,7 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
                 # Submit all tasks
                 future_to_idx = {executor.submit(_process_single_dipole_file, i, baseDir, coords_pattern,
                                                  output_pattern, magnitudes_pattern, dipole_metadata,
-                                                 stride, common_term, dipole_unit, coords_input_io_spec,
+                                                 stride, common_term, dipole_unit, all_neutral, com_pattern, coords_input_io_spec,
                                                  vectors_output_io_spec, magnitudes_output_io_spec): i for i in actual_dcd_list}
                 
                 # Process completed tasks
@@ -522,7 +596,7 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
                 for i in actual_dcd_list:
                     result = _process_single_dipole_file(i, baseDir, coords_pattern,
                                                        output_pattern, magnitudes_pattern, dipole_metadata,
-                                                       stride, common_term, dipole_unit, coords_input_io_spec, vectors_output_io_spec, magnitudes_output_io_spec)
+                                                       stride, common_term, dipole_unit, all_neutral, com_pattern, coords_input_io_spec, vectors_output_io_spec, magnitudes_output_io_spec)
                     results.append(result)
                     if result['success']:
                         successful_files += 1
@@ -546,7 +620,7 @@ def dipole_functions(baseDir, coords_pattern, psf_pattern, target_selection, vmd
         for i in actual_dcd_list:
             result = _process_single_dipole_file(i, baseDir, coords_pattern,
                                                output_pattern, magnitudes_pattern, dipole_metadata,
-                                               stride, common_term, dipole_unit, coords_input_io_spec, vectors_output_io_spec, magnitudes_output_io_spec)
+                                               stride, common_term, dipole_unit, all_neutral, com_pattern, coords_input_io_spec, vectors_output_io_spec, magnitudes_output_io_spec)
             results.append(result)
             
             if result['success']:

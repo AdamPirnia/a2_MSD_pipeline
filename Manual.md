@@ -410,6 +410,8 @@ Field:
 Use these fields:
 
 - `Coordinates Pattern`: full input `path + filename + extension` pattern for coordinate files
+- `All neutral particles`: check only if every net charge per selected group is zero
+- `COM Patterns`: full input `path + filename + extension` pattern for center-of-mass files used when `All neutral particles` is not checked
 - `Grouping Unit`: grouping used to define each individual dipole, currently `residue`, `chain`, or `segname`
 - `Dipole Vectors Pattern`: full output `path + filename + extension` pattern for dipole-vector files
 - `Magnitudes Pattern`: optional full output `path + filename + extension` pattern for dipole-magnitude files
@@ -419,6 +421,8 @@ What it does:
 
 - resolves atom masses, charges, and group membership from the PSF and target selection
 - loads atomic coordinate data for the selected atoms
+- if `All neutral particles` is checked, computes dipoles directly from atomic coordinates without subtracting centers of mass
+- if `All neutral particles` is not checked, loads the COM file and subtracts one COM per resolved group before computing dipoles
 - computes one dipole vector per resolved group for each frame
 - always computes dipole vectors for each frame
 - computes and saves dipole magnitudes only if the `Magnitudes Pattern` checkbox is enabled
@@ -441,6 +445,7 @@ Important input note:
 - `Coordinates Pattern` must point to per-atom coordinates, for example `xyz` or `unwr_xyz`
 - do not use COM-coordinate files such as `com_xyz` as the dipole coordinate input
 - the coordinate file must match the atom selection resolved from the PSF
+- when `All neutral particles` is not checked, the `COM Patterns` file must contain one COM vector per resolved group for each frame
 
 ### If `Calculation Method = collective`
 
