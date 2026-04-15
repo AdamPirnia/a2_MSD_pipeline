@@ -206,6 +206,7 @@ def compute_diffusion_from_vacf_files(
     saved_frame_dt_ps,
     velocity_units,
     vacf_is_normalized,
+    vacf_variance_ang2_per_ps2,
     temperature_k,
     output_file=None,
     molar_mass_g_mol=18.01528,
@@ -232,6 +233,8 @@ def compute_diffusion_from_vacf_files(
         raise ValueError("temperature_k must be positive.")
     if molar_mass_g_mol <= 0:
         raise ValueError("molar_mass_g_mol must be positive.")
+    if vacf_enabled and vacf_is_normalized and vacf_variance_ang2_per_ps2 <= 0:
+        raise ValueError("vacf_variance_ang2_per_ps2 must be positive when vacf_is_normalized is True.")
 
     file_paths = []
     velocity_scale = 1.0
@@ -265,7 +268,7 @@ def compute_diffusion_from_vacf_files(
             if vacf_is_normalized:
                 raw_for_integration = truncated.copy()
                 normalized_for_integration = truncated.copy()
-                vacf_variance = float(truncated[0])
+                vacf_variance = float(vacf_variance_ang2_per_ps2)
             else:
                 raw_for_integration = truncated * velocity_scale ** 2
                 vacf_variance = float(raw_for_integration[0])
@@ -284,9 +287,11 @@ def compute_diffusion_from_vacf_files(
             )
 
             if vacf_is_normalized:
-                variance_for_diffusion = float(equipartition_variance)
-                variance_source = "equipartition"
-                variance_percent_difference = np.nan
+                variance_for_diffusion = float(vacf_variance)
+                variance_source = "user"
+                variance_percent_difference = 100.0 * (
+                    vacf_variance - equipartition_variance
+                ) / equipartition_variance
             else:
                 variance_for_diffusion = vacf_variance
                 variance_source = "vacf0"
@@ -324,11 +329,11 @@ def compute_diffusion_from_vacf_files(
         variance_percent_difference = float(
             np.nanmean([item["variance_percent_difference"] for item in per_file_results])
         )
-        variance_source = "equipartition" if vacf_is_normalized else "vacf0"
+        variance_source = "user" if vacf_is_normalized else "vacf0"
         if vacf_is_normalized:
             variance_note = (
                 "Each VACF file was treated as already normalized. Tau and diffusion were computed per file "
-                "using the equipartition variance, then averaged across files."
+                "using the user-provided variance, then averaged across files."
             )
         else:
             variance_note = (
@@ -350,6 +355,7 @@ def compute_diffusion_from_vacf_files(
         "velocity_units": velocity_units,
         "velocity_scale_to_angstrom_per_ps": float(velocity_scale),
         "vacf_is_normalized": bool(vacf_is_normalized),
+        "vacf_input_variance_ang2_per_ps2": float(vacf_variance_ang2_per_ps2),
         "temperature_k": float(temperature_k),
         "molar_mass_g_mol": float(molar_mass_g_mol),
         "tau_ps": float(tau_ps),
