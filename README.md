@@ -221,7 +221,7 @@ Input-handling highlights:
 - relative VACF, MSD, and output paths are resolved from `Base Directory`
 - if a time axis exists, the first column is treated as time and the second as data
 - if a time axis does not exist, the module reconstructs time from the saved-frame timestep
-- normalized VACF input disables velocity-unit conversion and uses the equipartition variance for the diffusion estimate
+- normalized VACF input disables velocity-unit conversion and uses a user-provided variance for the diffusion estimate
 - if multiple temperatures match one common-term list exactly, temperatures are paired with that common term instead of nested separately
 
 ### 6. Static Structure Factor

@@ -674,8 +674,9 @@ Fields:
 - `Time Axis Exist`: tells the software whether the VACF file already contains a time column
 - `Saved Frame dt`: used only when `Time Axis Exist` is unchecked
 - `Time Axis Unit`: currently recorded as input metadata for the user; the actual parsing decision is controlled by `Time Axis Exist`
-- `VACF Already Normalized`: tells the software whether the VACF has already been divided by its `t = 0` value
+- `Normalized VACF`: tells the software whether the VACF has already been divided by its `t = 0` value
 - `Velocity Units`: `namd_internal` or `angstrom_per_ps`
+- `Variance`: required when `Normalized VACF` is checked; used for the VACF-based diffusion estimate in `A^2/ps^2`
 
 How VACF input is interpreted:
 
@@ -688,16 +689,18 @@ How VACF input is interpreted:
 
 How normalization and units are handled:
 
-- if `VACF Already Normalized` is unchecked:
+- if `Normalized VACF` is unchecked:
   - the software reads the VACF as an unnormalized physical VACF
   - if `Velocity Units = namd_internal`, velocities are converted using the built-in factor before the variance-based diffusion estimate is formed
   - each VACF is normalized internally by its own `VACF[0]` before integrating `tau`
   - `VACF var, ang^2/ps^2` is reported in the output
-- if `VACF Already Normalized` is checked:
+- if `Normalized VACF` is checked:
   - the software assumes the input is already normalized
   - the velocity-unit menu is disabled and no unit conversion is applied
-  - the diffusion estimate uses the equipartition variance instead of a measured `VACF[0]`
-  - `VACF var, ang^2/ps^2` is not reported in the results
+  - the `Variance` field becomes active and must be provided by the user
+  - the diffusion estimate uses the user-provided variance
+  - `VACF var, ang^2/ps^2` in the output corresponds to the user-provided variance
+  - the equipartition variance is still reported separately for comparison
 
 ### D MSD
 
