@@ -93,6 +93,29 @@ def _format_missing_file_message(label, path):
 
     return ". ".join(details)
 
+
+def _normalize_velocity_output_io_spec(output_io_spec):
+    spec = dict(output_io_spec or {})
+    mode = str(spec.get("mode", "text")).strip().lower()
+    precision = str(spec.get("precision", "single")).strip().lower()
+    decimals = spec.get("decimals")
+    if mode not in {"text", "binary"}:
+        mode = "text"
+    if precision not in {"single", "double", "custom"}:
+        precision = "single"
+    if precision == "custom":
+        try:
+            decimals = int(decimals)
+        except Exception:
+            decimals = 6
+    else:
+        decimals = None
+    return {"mode": mode, "precision": precision, "decimals": decimals}
+
+
+def _velocity_temp_text_output_path(output_file):
+    return f"{output_file}.vmdtmp"
+
 def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, grouping_unit="residue", vmd=None, max_workers=None, dcd_indices=None, common_term="", output_io_spec=None, stride=1):
     """
     Extracts center-of-mass velocities from a series of VELDCD trajectories using VMD in parallel,
@@ -280,7 +303,18 @@ def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None
     
     # Generate all TCL scripts first with pattern validation
     for i in dcd_list:
-        success = _write_velocity_tcl_script(i, baseDir, psf_pattern, veldcd_pattern, output_pattern, target_selection, grouping_unit, common_term, stride)
+        success = _write_velocity_tcl_script(
+            i,
+            baseDir,
+            psf_pattern,
+            veldcd_pattern,
+            output_pattern,
+            target_selection,
+            grouping_unit,
+            common_term,
+            stride,
+            output_io_spec=output_io_spec,
+        )
         if not success:
             print(f"ERROR: Failed to generate TCL script for chunk {i} due to pattern validation failure.")
             print("Please fix the corrupted patterns in your GUI input fields and try again.")
@@ -358,7 +392,7 @@ def extract_velocities(baseDir, psf_pattern, veldcd_pattern, output_pattern=None
     return results
 
 
-def _write_velocity_tcl_script(i, baseDir, psf_pattern, veldcd_pattern, output_pattern, target_selection, grouping_unit, common_term="", stride=1):
+def _write_velocity_tcl_script(i, baseDir, psf_pattern, veldcd_pattern, output_pattern, target_selection, grouping_unit, common_term="", stride=1, output_io_spec=None):
     """Write optimized TCL script for velocity extraction from a single trajectory chunk."""
     
     # Expand patterns to get actual file paths
@@ -436,11 +470,17 @@ def _write_velocity_tcl_script(i, baseDir, psf_pattern, veldcd_pattern, output_p
     psf_full_path = os.path.join(baseDir, psf_path)
     veldcd_full_path = os.path.join(baseDir, veldcd_path)
     output_full_path = os.path.join(baseDir, output_path)
+    normalized_output = _normalize_velocity_output_io_spec(output_io_spec)
+    vmd_output_path = output_full_path
+    if not (normalized_output["mode"] == "text" and normalized_output["precision"] == "single"):
+        vmd_output_path = _velocity_temp_text_output_path(output_full_path)
     
     print(f"DEBUG Velocity TCL Script {i}:")
     print(f"  Output pattern: {output_pattern}")
     print(f"  Expanded output: {output_path}")
     print(f"  Full output path: {output_full_path}")
+    if vmd_output_path != output_full_path:
+        print(f"  Temporary VMD text output: {vmd_output_path}")
     print(f"  Output directory: {os.path.dirname(output_full_path)}")
     
     # Ensure output directory exists before creating TCL script
@@ -462,7 +502,7 @@ puts "Timestamp: [clock format [clock seconds]]"
 set baseDir "{_tcl_quote(baseDir)}"
 
 # Open output file
-set outfile [open "{_tcl_quote(output_full_path)}" w]
+set outfile [open "{_tcl_quote(vmd_output_path)}" w]
 
 # Load trajectory
 set PSF "{_tcl_quote(psf_full_path)}"
@@ -576,14 +616,14 @@ close $outfile
 mol delete $traj
 
 puts "Velocity extraction complete: $frame_count frames processed"
-puts "Output written to: {_tcl_quote(output_full_path)}"
+puts "Output written to: {_tcl_quote(vmd_output_path)}"
 
 # Verify output file was created and has content
-if {{[file exists "{_tcl_quote(output_full_path)}"]}} {{
-    set filesize [file size "{_tcl_quote(output_full_path)}"]
-    puts "✓ Output file verified: {_tcl_quote(output_full_path)} ($filesize bytes)"
+if {{[file exists "{_tcl_quote(vmd_output_path)}"]}} {{
+    set filesize [file size "{_tcl_quote(vmd_output_path)}"]
+    puts "✓ Output file verified: {_tcl_quote(vmd_output_path)} ($filesize bytes)"
 }} else {{
-    puts "✗ ERROR: Output file was not created: {_tcl_quote(output_full_path)}"
+    puts "✗ ERROR: Output file was not created: {_tcl_quote(vmd_output_path)}"
     exit 1
 }}
 
@@ -632,11 +672,11 @@ def _run_velocity_vmd_script(index, vmd_path, common_term="", output_dir="logs",
         success = process.returncode == 0
         if success and output_pattern and output_io_spec:
             output_file = os.path.join(baseDir, expand_path_pattern(output_pattern, common_term, index))
-            mode = str(output_io_spec.get("mode", "text")).lower()
-            precision = str(output_io_spec.get("precision", "single")).lower()
-            if not (mode == "text" and precision == "single"):
+            normalized_output = _normalize_velocity_output_io_spec(output_io_spec)
+            if not (normalized_output["mode"] == "text" and normalized_output["precision"] == "single"):
+                input_file = _velocity_temp_text_output_path(output_file)
                 data = load_numeric_array(
-                    output_file,
+                    input_file,
                     {"mode": "text", "precision": "single"},
                     default_mode="text",
                     default_precision="single",
@@ -648,6 +688,8 @@ def _run_velocity_vmd_script(index, vmd_path, common_term="", output_dir="logs",
                     default_mode="text",
                     default_precision="single",
                 )
+                if os.path.exists(input_file):
+                    os.remove(input_file)
         return success, process.stdout, process.stderr
         
     except subprocess.TimeoutExpired:
