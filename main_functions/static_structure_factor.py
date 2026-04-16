@@ -21,12 +21,14 @@ def isotropic_structure_factor_db_density(
     r_flat: np.ndarray,
     k_vals: np.ndarray,
     box: np.ndarray | None = None,
+    cutoff: float | None = None,
     frame_chunk: int = 10,
     i_chunk: int = 256,
     j_chunk: int = 256,
     k_chunk: int = 64,
     dtype: Any = np.float64,
     include_leading_one: bool = True,
+    normalize_by_frames: bool = True,
 ) -> np.ndarray:
     k_vals = np.asarray(k_vals, dtype=dtype)
     r_arr = np.asarray(r_flat, dtype=dtype)
@@ -57,9 +59,12 @@ def isotropic_structure_factor_db_density(
     total_frames = int(r.shape[0])
     if total_frames <= 0:
         raise ValueError("Coordinate arrays must contain at least one frame.")
+    if cutoff is not None and float(cutoff) <= 0:
+        raise ValueError("cutoff must be positive when provided.")
 
     inv_pi = dtype(1.0 / np.pi)
     s_accum = np.zeros(k_vals.size, dtype=dtype)
+    cutoff_sq = None if cutoff is None else float(cutoff) ** 2
 
     for f0 in range(0, total_frames, frame_chunk):
         f1 = min(total_frames, f0 + frame_chunk)
@@ -80,6 +85,9 @@ def isotropic_structure_factor_db_density(
                 ni = i1 - i0
                 a_idx, b_idx = np.triu_indices(ni, k=1)
                 keep = a_idx * ni + b_idx
+                if cutoff_sq is not None:
+                    dist_sq = np.sum(dr * dr, axis=2).ravel()
+                    keep = keep[dist_sq[keep] <= cutoff_sq]
                 dist_use = dist[keep]
 
                 for k0 in range(0, k_vals.size, k_chunk):
@@ -93,7 +101,10 @@ def isotropic_structure_factor_db_density(
                     dr = ri[:, None, :] - rj[None, :, :]
                     if box is not None:
                         dr -= box * np.rint(dr / box)
-                    dist = np.sqrt(np.sum(dr * dr, axis=2)).ravel()
+                    dist_sq = np.sum(dr * dr, axis=2).ravel()
+                    if cutoff_sq is not None:
+                        dist_sq = dist_sq[dist_sq <= cutoff_sq]
+                    dist = np.sqrt(dist_sq)
 
                     for k0 in range(0, k_vals.size, k_chunk):
                         k1 = min(k_vals.size, k0 + k_chunk)
@@ -105,59 +116,112 @@ def isotropic_structure_factor_db_density(
             else:
                 s_accum += (2.0 / natms) * pair_sum_k
 
-    return s_accum / float(total_frames)
+    if normalize_by_frames:
+        return s_accum / float(total_frames)
+    return s_accum
 
 
-def isotropic_k_magnitudes(Lx: float, Ly: float, Lz: float, kmax: float, dtype: Any = np.float64) -> np.ndarray:
+def isotropic_k_magnitudes_three_tier(
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    kmax1: float,
+    kmax2: float,
+    kmax3: float,
+    c1: int = 1,
+    c2: int = 1,
+    c3: int = 1,
+    dtype: Any = np.float64,
+) -> np.ndarray:
+    if kmax1 < 0 or kmax2 <= 0 or kmax3 <= 0:
+        raise ValueError("kmax values must satisfy kmax1 >= 0, kmax2 > 0, and kmax3 > 0.")
+    if kmax1 > kmax2 or kmax2 > kmax3:
+        raise ValueError("kmax values must satisfy kmax1 <= kmax2 <= kmax3.")
+    if int(c1) <= 0 or int(c2) <= 0 or int(c3) <= 0:
+        raise ValueError("k stride values must be positive integers.")
+
     two_pi = np.array(2.0 * np.pi, dtype=dtype)
-    nxmax = int(np.ceil(kmax * Lx / two_pi))
-    nymax = int(np.ceil(kmax * Ly / two_pi))
-    nzmax = int(np.ceil(kmax * Lz / two_pi))
+    nxmax = int(np.ceil(kmax3 * Lx / two_pi))
+    nymax = int(np.ceil(kmax3 * Ly / two_pi))
+    nzmax = int(np.ceil(kmax3 * Lz / two_pi))
 
-    km: list[float] = []
-    for nx in range(1, nxmax + 1):
-        for ny in range(1, nymax + 1):
-            for nz in range(1, nzmax + 1):
-                kvec = two_pi * np.array([nx / Lx, ny / Ly, nz / Lz], dtype=dtype)
-                mag = float(np.linalg.norm(kvec))
-                if mag <= kmax:
-                    km.append(mag)
+    kmags: list[float] = []
+    seen: set[tuple[int, int, int]] = set()
 
-    k_mags = np.asarray(km, dtype=dtype)
+    for kmin, kmax, stride in (
+        (0.0, float(kmax1), int(c1)),
+        (float(kmax1), float(kmax2), int(c2)),
+        (float(kmax2), float(kmax3), int(c3)),
+    ):
+        for nx in range(1, nxmax + 1, stride):
+            for ny in range(1, nymax + 1, stride):
+                for nz in range(1, nzmax + 1, stride):
+                    index_triplet = (int(nx), int(ny), int(nz))
+                    if index_triplet in seen:
+                        continue
+                    kvec = two_pi * np.array([nx / Lx, ny / Ly, nz / Lz], dtype=dtype)
+                    kmag = float(np.linalg.norm(kvec))
+                    if kmin <= kmag <= kmax and (kmin == 0.0 or kmag > kmin):
+                        kmags.append(kmag)
+                        seen.add(index_triplet)
+
+    k_mags = np.asarray(kmags, dtype=dtype)
     if k_mags.size > 1:
         k_mags = k_mags[np.argsort(k_mags)]
     return k_mags
 
 
-def directional_k_vectors(
+def directional_k_vectors_three_tier(
     Lx: float,
     Ly: float,
     Lz: float,
-    kmax: float,
+    kmax1: float,
+    kmax2: float,
+    kmax3: float,
+    c1: int = 1,
+    c2: int = 1,
+    c3: int = 1,
     active_axes: tuple[str, ...] | None = None,
     dtype: Any = np.float64,
 ) -> np.ndarray:
+    if kmax1 < 0 or kmax2 <= 0 or kmax3 <= 0:
+        raise ValueError("kmax values must satisfy kmax1 >= 0, kmax2 > 0, and kmax3 > 0.")
+    if kmax1 > kmax2 or kmax2 > kmax3:
+        raise ValueError("kmax values must satisfy kmax1 <= kmax2 <= kmax3.")
+    if int(c1) <= 0 or int(c2) <= 0 or int(c3) <= 0:
+        raise ValueError("k stride values must be positive integers.")
+
     axis_order = ("x", "y", "z")
     active = set(active_axes or axis_order)
     length_map = {"x": float(Lx), "y": float(Ly), "z": float(Lz)}
     limits = {
-        axis: int(np.ceil(kmax * length_map[axis] / (2.0 * np.pi)))
+        axis: int(np.ceil(kmax3 * length_map[axis] / (2.0 * np.pi)))
         for axis in axis_order
     }
 
     vectors: list[tuple[float, float, float]] = []
-    for nx in range(0, limits["x"] + 1 if "x" in active else 1):
-        for ny in range(0, limits["y"] + 1 if "y" in active else 1):
-            for nz in range(0, limits["z"] + 1 if "z" in active else 1):
-                if nx == 0 and ny == 0 and nz == 0:
-                    continue
-                kvec = 2.0 * np.pi * np.array(
-                    [nx / float(Lx), ny / float(Ly), nz / float(Lz)],
-                    dtype=dtype,
-                )
-                mag = float(np.linalg.norm(kvec))
-                if mag <= float(kmax):
-                    vectors.append((float(kvec[0]), float(kvec[1]), float(kvec[2])))
+    seen: set[tuple[int, int, int]] = set()
+    for kmin, kmax, stride in (
+        (0.0, float(kmax1), int(c1)),
+        (float(kmax1), float(kmax2), int(c2)),
+        (float(kmax2), float(kmax3), int(c3)),
+    ):
+        for nx in range(0, limits["x"] + 1 if "x" in active else 1, stride):
+            for ny in range(0, limits["y"] + 1 if "y" in active else 1, stride):
+                for nz in range(0, limits["z"] + 1 if "z" in active else 1, stride):
+                    if nx == 0 and ny == 0 and nz == 0:
+                        continue
+                    index_triplet = (int(nx), int(ny), int(nz))
+                    if index_triplet in seen:
+                        continue
+                    kvec = 2.0 * np.pi * np.array(
+                        [nx / float(Lx), ny / float(Ly), nz / float(Lz)],
+                        dtype=dtype,
+                    )
+                    mag = float(np.linalg.norm(kvec))
+                    if kmin <= mag <= kmax and (kmin == 0.0 or mag > kmin):
+                        vectors.append((float(kvec[0]), float(kvec[1]), float(kvec[2])))
+                        seen.add(index_triplet)
 
     if not vectors:
         return np.empty((0, 3), dtype=dtype)
@@ -174,14 +238,43 @@ def directional_k_vectors(
     return k_vectors_array[sort_order]
 
 
+def isotropic_k_magnitudes(Lx: float, Ly: float, Lz: float, kmax: float, dtype: Any = np.float64) -> np.ndarray:
+    return isotropic_k_magnitudes_three_tier(Lx, Ly, Lz, 0.0, kmax, kmax, c1=1, c2=1, c3=1, dtype=dtype)
+
+
+def directional_k_vectors(
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    kmax: float,
+    active_axes: tuple[str, ...] | None = None,
+    dtype: Any = np.float64,
+) -> np.ndarray:
+    return directional_k_vectors_three_tier(
+        Lx,
+        Ly,
+        Lz,
+        0.0,
+        kmax,
+        kmax,
+        c1=1,
+        c2=1,
+        c3=1,
+        active_axes=active_axes,
+        dtype=dtype,
+    )
+
+
 def directional_structure_factor(
     r_flat: np.ndarray,
     k_vectors_array: np.ndarray,
     box: np.ndarray | None = None,
+    cutoff: float | None = None,
     frame_chunk: int = 10,
     atom_chunk: int = 256,
     k_chunk: int = 64,
     dtype: Any = np.float64,
+    normalize_by_frames: bool = True,
 ) -> np.ndarray:
     k_vectors_array = np.asarray(k_vectors_array, dtype=dtype)
     r_arr = np.asarray(r_flat, dtype=dtype)
@@ -216,8 +309,11 @@ def directional_structure_factor(
     total_frames = int(r.shape[0])
     if total_frames <= 0:
         raise ValueError("Coordinate arrays must contain at least one frame.")
+    if cutoff is not None and float(cutoff) <= 0:
+        raise ValueError("cutoff must be positive when provided.")
 
     s_accum = np.zeros(k_vectors_array.shape[0], dtype=np.float64)
+    cutoff_sq = None if cutoff is None else float(cutoff) ** 2
 
     for f0 in range(0, total_frames, frame_chunk):
         f1 = min(total_frames, f0 + frame_chunk)
@@ -229,16 +325,62 @@ def directional_structure_factor(
             else:
                 r_frame_use = r_frame
 
-            for k0 in range(0, k_vectors_array.shape[0], k_chunk):
-                k1 = min(k_vectors_array.shape[0], k0 + k_chunk)
-                rho = np.zeros(k1 - k0, dtype=np.complex128)
-                for a0 in range(0, natms, atom_chunk):
-                    a1 = min(natms, a0 + atom_chunk)
-                    phase = np.matmul(r_frame_use[a0:a1], k_vectors_array[k0:k1].T)
-                    rho += np.exp(1j * phase).sum(axis=0)
-                s_accum[k0:k1] += (rho * np.conjugate(rho)).real / float(natms)
+            if cutoff_sq is None:
+                for k0 in range(0, k_vectors_array.shape[0], k_chunk):
+                    k1 = min(k_vectors_array.shape[0], k0 + k_chunk)
+                    rho = np.zeros(k1 - k0, dtype=np.complex128)
+                    for a0 in range(0, natms, atom_chunk):
+                        a1 = min(natms, a0 + atom_chunk)
+                        phase = np.matmul(r_frame_use[a0:a1], k_vectors_array[k0:k1].T)
+                        rho += np.exp(1j * phase).sum(axis=0)
+                    s_accum[k0:k1] += (rho * np.conjugate(rho)).real / float(natms)
+                continue
 
-    return s_accum / float(total_frames)
+            pair_sum_k = np.zeros(k_vectors_array.shape[0], dtype=np.float64)
+            for i0 in range(0, natms, atom_chunk):
+                i1 = min(natms, i0 + atom_chunk)
+                ri = r_frame_use[i0:i1]
+
+                dr = ri[:, None, :] - ri[None, :, :]
+                if box is not None:
+                    dr -= box * np.rint(dr / box)
+                dist_sq = np.sum(dr * dr, axis=2).ravel()
+
+                ni = i1 - i0
+                a_idx, b_idx = np.triu_indices(ni, k=1)
+                keep = a_idx * ni + b_idx
+                keep = keep[dist_sq[keep] <= cutoff_sq]
+                dr_use = dr.reshape(-1, 3)[keep]
+
+                for k0 in range(0, k_vectors_array.shape[0], k_chunk):
+                    k1 = min(k_vectors_array.shape[0], k0 + k_chunk)
+                    if dr_use.size == 0:
+                        continue
+                    phase = np.matmul(dr_use, k_vectors_array[k0:k1].T)
+                    pair_sum_k[k0:k1] += np.cos(phase).sum(axis=0)
+
+                for j0 in range(i1, natms, atom_chunk):
+                    j1 = min(natms, j0 + atom_chunk)
+                    rj = r_frame_use[j0:j1]
+                    dr = ri[:, None, :] - rj[None, :, :]
+                    if box is not None:
+                        dr -= box * np.rint(dr / box)
+                    dist_sq = np.sum(dr * dr, axis=2).reshape(-1)
+                    keep = dist_sq <= cutoff_sq
+                    dr_use = dr.reshape(-1, 3)[keep]
+
+                    for k0 in range(0, k_vectors_array.shape[0], k_chunk):
+                        k1 = min(k_vectors_array.shape[0], k0 + k_chunk)
+                        if dr_use.size == 0:
+                            continue
+                        phase = np.matmul(dr_use, k_vectors_array[k0:k1].T)
+                        pair_sum_k[k0:k1] += np.cos(phase).sum(axis=0)
+
+            s_accum += 1.0 + (2.0 / float(natms)) * pair_sum_k
+
+    if normalize_by_frames:
+        return s_accum / float(total_frames)
+    return s_accum
 
 
 def parse_k_component_selection(selection: str) -> list[tuple[str, ...]]:
@@ -452,34 +594,40 @@ def _build_khat(k_vectors_array: np.ndarray) -> np.ndarray:
     return khat
 
 
-def charge_dipole_k_vectors_two_tier(
+def charge_dipole_k_vectors_three_tier(
     Lx: float,
     Ly: float,
     Lz: float,
     kmax1: float,
     kmax2: float,
+    kmax3: float,
     c1: int = 1,
     c2: int = 1,
+    c3: int = 1,
     dtype: Any = np.float64,
     include_zero: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    if kmax1 < 0 or kmax2 <= 0:
-        raise ValueError("kmax values must satisfy kmax1 >= 0 and kmax2 > 0.")
-    if kmax1 > kmax2:
-        raise ValueError("kmax1 must be less than or equal to kmax2.")
-    if int(c1) <= 0 or int(c2) <= 0:
+    if kmax1 < 0 or kmax2 <= 0 or kmax3 <= 0:
+        raise ValueError("kmax values must satisfy kmax1 >= 0, kmax2 > 0, and kmax3 > 0.")
+    if kmax1 > kmax2 or kmax2 > kmax3:
+        raise ValueError("kmax values must satisfy kmax1 <= kmax2 <= kmax3.")
+    if int(c1) <= 0 or int(c2) <= 0 or int(c3) <= 0:
         raise ValueError("k stride values must be positive integers.")
 
     two_pi = np.array(2.0 * np.pi, dtype=dtype)
-    nxmax = int(np.ceil(float(kmax2) * float(Lx) / float(two_pi)))
-    nymax = int(np.ceil(float(kmax2) * float(Ly) / float(two_pi)))
-    nzmax = int(np.ceil(float(kmax2) * float(Lz) / float(two_pi)))
+    nxmax = int(np.ceil(float(kmax3) * float(Lx) / float(two_pi)))
+    nymax = int(np.ceil(float(kmax3) * float(Ly) / float(two_pi)))
+    nzmax = int(np.ceil(float(kmax3) * float(Lz) / float(two_pi)))
 
     kmags: list[float] = []
     kvecs: list[tuple[float, float, float]] = []
     seen: set[tuple[int, int, int]] = set()
 
-    for kmin, kmax, stride in ((0.0, float(kmax1), int(c1)), (float(kmax1), float(kmax2), int(c2))):
+    for kmin, kmax, stride in (
+        (0.0, float(kmax1), int(c1)),
+        (float(kmax1), float(kmax2), int(c2)),
+        (float(kmax2), float(kmax3), int(c3)),
+    ):
         for nx in range(-nxmax, nxmax + 1, stride):
             for ny in range(-nymax, nymax + 1, stride):
                 for nz in range(-nzmax, nzmax + 1, stride):
@@ -545,6 +693,7 @@ def charge_dipole_structure_factor_directional(
     dipole_directions: np.ndarray,
     cutoff: float | None = None,
     dtype: Any = np.float64,
+    normalize_by_frames: bool = True,
 ) -> np.ndarray:
     k_vectors_use = np.asarray(k_vectors_array, dtype=dtype)
     rq = np.asarray(charge_positions, dtype=dtype)
@@ -576,7 +725,6 @@ def charge_dipole_structure_factor_directional(
     out_im = np.empty(k_vectors_use.shape[0], dtype=np.float64)
     frame_count = int(rq.shape[0])
     dipole_count = int(rp.shape[1])
-    inv_frame = 1.0 / float(frame_count)
     inv_dipole_count = 1.0 / float(dipole_count)
 
     for k_index, (kvec, khat_vec) in enumerate(zip(k_vectors_use, khat, strict=False)):
@@ -654,8 +802,9 @@ def charge_dipole_structure_factor_directional(
                 acc_re += q_sin * p_cos - q_cos * p_sin
                 acc_im += q_cos * p_cos + q_sin * p_sin
 
-        out_re[k_index] = acc_re * inv_frame * inv_dipole_count
-        out_im[k_index] = acc_im * inv_frame * inv_dipole_count
+        scale = inv_dipole_count / float(frame_count) if normalize_by_frames else inv_dipole_count
+        out_re[k_index] = acc_re * scale
+        out_im[k_index] = acc_im * scale
 
     return out_re + 1j * out_im
 
@@ -671,13 +820,16 @@ def compute_charge_dipole_structure_factor_from_files(
     directional_output_file: str,
     k_max_primary: float,
     k_max_secondary: float,
+    k_max_tertiary: float,
     k_stride_primary: int,
     k_stride_secondary: int,
+    k_stride_tertiary: int,
     Lx: float,
     Ly: float,
     Lz: float,
     shell_width: float,
     cutoff: float | None = None,
+    num_trajectories: int | None = None,
     delete_residue_index: int | None = None,
     frame_window: tuple[int, int | None, int] | None = None,
     input_io_spec: dict[str, Any] | None = None,
@@ -687,11 +839,11 @@ def compute_charge_dipole_structure_factor_from_files(
     box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
-    if float(k_max_primary) < 0 or float(k_max_secondary) <= 0:
-        raise ValueError("k max values must satisfy k_max_primary >= 0 and k_max_secondary > 0.")
-    if float(k_max_primary) > float(k_max_secondary):
-        raise ValueError("k_max_primary must be less than or equal to k_max_secondary.")
-    if int(k_stride_primary) <= 0 or int(k_stride_secondary) <= 0:
+    if float(k_max_primary) < 0 or float(k_max_secondary) <= 0 or float(k_max_tertiary) <= 0:
+        raise ValueError("k max values must satisfy k_max_primary >= 0, k_max_secondary > 0, and k_max_tertiary > 0.")
+    if float(k_max_primary) > float(k_max_secondary) or float(k_max_secondary) > float(k_max_tertiary):
+        raise ValueError("k max values must satisfy k_max_primary <= k_max_secondary <= k_max_tertiary.")
+    if int(k_stride_primary) <= 0 or int(k_stride_secondary) <= 0 or int(k_stride_tertiary) <= 0:
         raise ValueError("k stride values must be positive integers.")
     if float(shell_width) <= 0:
         raise ValueError("shell_width must be positive.")
@@ -714,6 +866,13 @@ def compute_charge_dipole_structure_factor_from_files(
     charge_coordinate_files = _discover_coordinate_files(baseDir, charge_coords_pattern)
     dipole_position_files = _discover_coordinate_files(baseDir, dipole_positions_pattern)
     dipole_vector_files = _discover_coordinate_files(baseDir, dipole_vectors_pattern)
+    if num_trajectories is not None and int(num_trajectories) <= 0:
+        raise ValueError("num_trajectories must be positive when provided.")
+    if num_trajectories is not None:
+        limit = int(num_trajectories)
+        charge_coordinate_files = charge_coordinate_files[:limit]
+        dipole_position_files = dipole_position_files[:limit]
+        dipole_vector_files = dipole_vector_files[:limit]
     file_counts = {
         "charge coordinate": len(charge_coordinate_files),
         "dipole position": len(dipole_position_files),
@@ -725,14 +884,16 @@ def compute_charge_dipole_structure_factor_from_files(
             f"Discovered counts: {file_counts}"
         )
 
-    k_magnitudes, k_vectors_array = charge_dipole_k_vectors_two_tier(
+    k_magnitudes, k_vectors_array = charge_dipole_k_vectors_three_tier(
         float(Lx),
         float(Ly),
         float(Lz),
         float(k_max_primary),
         float(k_max_secondary),
+        float(k_max_tertiary),
         c1=int(k_stride_primary),
         c2=int(k_stride_secondary),
+        c3=int(k_stride_tertiary),
     )
     if k_vectors_array.shape[0] == 0:
         raise ValueError("No charge-dipole k vectors were generated. Increase k max values or verify the box lengths.")
@@ -753,8 +914,10 @@ def compute_charge_dipole_structure_factor_from_files(
     print(f"Directional output path: {directional_output_file}", flush=True)
     print(f"k max primary: {float(k_max_primary):.8f}", flush=True)
     print(f"k max secondary: {float(k_max_secondary):.8f}", flush=True)
+    print(f"k max tertiary: {float(k_max_tertiary):.8f}", flush=True)
     print(f"k stride primary: {int(k_stride_primary)}", flush=True)
     print(f"k stride secondary: {int(k_stride_secondary)}", flush=True)
+    print(f"k stride tertiary: {int(k_stride_tertiary)}", flush=True)
     print(f"directional k vectors: {int(k_vectors_array.shape[0])}", flush=True)
     print(f"shell width: {float(shell_width):.8f}", flush=True)
     print(f"delete residue index: {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
@@ -845,8 +1008,9 @@ def compute_charge_dipole_structure_factor_from_files(
             dipole_positions,
             dipole_directions,
             cutoff=cutoff,
+            normalize_by_frames=False,
         )
-        sqp_sum += directional_values * float(frame_count)
+        sqp_sum += directional_values
         total_frames += int(frame_count)
         per_file_stats.append(
             {
@@ -912,6 +1076,8 @@ def _compute_dataset_average(
     coordinate_files: list[str],
     k_vals: np.ndarray,
     box: np.ndarray,
+    cutoff: float | None,
+    num_trajectories: int | None,
     input_io_spec: dict[str, Any] | None,
     dataset_label: str,
     max_workers: int,
@@ -925,18 +1091,21 @@ def _compute_dataset_average(
     success_indices: list[int] = []
     failed: list[dict[str, Any]] = []
 
+    selected_files = coordinate_files[: int(num_trajectories)] if num_trajectories is not None else coordinate_files
+
     task_args = [
         (
             file_path,
             k_vals,
             box,
+            cutoff,
             input_io_spec,
             frame_chunk,
             coord_chunk,
             k_chunk,
             frame_window,
         )
-        for file_path in coordinate_files
+        for file_path in selected_files
     ]
 
     if int(max_workers) > 1 and len(task_args) > 1:
@@ -949,7 +1118,7 @@ def _compute_dataset_average(
         if item["error"]:
             failed.append({"file_path": item["file_path"], "error": item["error"]})
             continue
-        weighted_sum += np.asarray(item["sk_values"], dtype=np.float64) * int(item["frame_count"])
+        weighted_sum += np.asarray(item["sk_values"], dtype=np.float64)
         total_frames += int(item["frame_count"])
         success_indices.append(str(item["file_path"]))
 
@@ -970,6 +1139,8 @@ def _compute_dataset_average_directional(
     coordinate_files: list[str],
     k_vectors_array: np.ndarray,
     box: np.ndarray,
+    cutoff: float | None,
+    num_trajectories: int | None,
     input_io_spec: dict[str, Any] | None,
     dataset_label: str,
     max_workers: int,
@@ -983,18 +1154,21 @@ def _compute_dataset_average_directional(
     success_indices: list[str] = []
     failed: list[dict[str, Any]] = []
 
+    selected_files = coordinate_files[: int(num_trajectories)] if num_trajectories is not None else coordinate_files
+
     task_args = [
         (
             file_path,
             k_vectors_array,
             box,
+            cutoff,
             input_io_spec,
             frame_chunk,
             coord_chunk,
             k_chunk,
             frame_window,
         )
-        for file_path in coordinate_files
+        for file_path in selected_files
     ]
 
     if int(max_workers) > 1 and len(task_args) > 1:
@@ -1007,7 +1181,7 @@ def _compute_dataset_average_directional(
         if item["error"]:
             failed.append({"file_path": item["file_path"], "error": item["error"]})
             continue
-        weighted_sum += np.asarray(item["sk_values"], dtype=np.float64) * int(item["frame_count"])
+        weighted_sum += np.asarray(item["sk_values"], dtype=np.float64)
         total_frames += int(item["frame_count"])
         success_indices.append(str(item["file_path"]))
 
@@ -1028,6 +1202,7 @@ def _compute_single_trajectory_sk(args: tuple[Any, ...]) -> dict[str, Any]:
         file_path,
         k_vals,
         box,
+        cutoff,
         input_io_spec,
         frame_chunk,
         coord_chunk,
@@ -1064,10 +1239,12 @@ def _compute_single_trajectory_sk(args: tuple[Any, ...]) -> dict[str, Any]:
             coords,
             k_vals,
             box=box,
+            cutoff=cutoff,
             frame_chunk=int(frame_chunk),
             i_chunk=int(coord_chunk),
             j_chunk=int(coord_chunk),
             k_chunk=int(k_chunk),
+            normalize_by_frames=False,
         )
         elapsed_s = float(time.time() - start_time)
         print(f"  completed in {elapsed_s:.2f} s", flush=True)
@@ -1087,6 +1264,7 @@ def _compute_single_trajectory_directional_sk(args: tuple[Any, ...]) -> dict[str
         file_path,
         k_vectors_array,
         box,
+        cutoff,
         input_io_spec,
         frame_chunk,
         coord_chunk,
@@ -1122,9 +1300,11 @@ def _compute_single_trajectory_directional_sk(args: tuple[Any, ...]) -> dict[str
             coords,
             k_vectors_use,
             box=box,
+            cutoff=cutoff,
             frame_chunk=int(frame_chunk),
             atom_chunk=int(coord_chunk),
             k_chunk=int(k_chunk),
+            normalize_by_frames=False,
         )
         elapsed_s = float(time.time() - start_time)
         print(f"  completed in {elapsed_s:.2f} s", flush=True)
@@ -1144,11 +1324,18 @@ def compute_static_structure_factor_from_files(
     baseDir: str,
     coords_pattern: str,
     output_file: str,
-    k_max: float,
+    k_max_primary: float,
+    k_max_secondary: float,
+    k_max_tertiary: float,
+    k_stride_primary: int,
+    k_stride_secondary: int,
+    k_stride_tertiary: int,
     Lx: float,
     Ly: float,
     Lz: float,
-    tolerance: float,
+    shell_width: float,
+    cutoff: float | None = None,
+    num_trajectories: int | None = None,
     max_workers: int = 1,
     frame_chunk: int = 10,
     coord_chunk: int = 256,
@@ -1158,10 +1345,16 @@ def compute_static_structure_factor_from_files(
     output_io_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     overall_start = time.time()
-    if k_max <= 0:
-        raise ValueError("k_max must be positive.")
-    if tolerance < 0:
-        raise ValueError("tolerance must be non-negative.")
+    if k_max_primary < 0 or k_max_secondary <= 0 or k_max_tertiary <= 0:
+        raise ValueError("k max values must satisfy k_max_primary >= 0, k_max_secondary > 0, and k_max_tertiary > 0.")
+    if k_max_primary > k_max_secondary or k_max_secondary > k_max_tertiary:
+        raise ValueError("k max values must satisfy k_max_primary <= k_max_secondary <= k_max_tertiary.")
+    if k_stride_primary <= 0 or k_stride_secondary <= 0 or k_stride_tertiary <= 0:
+        raise ValueError("k stride values must be positive integers.")
+    if shell_width <= 0:
+        raise ValueError("shell_width must be positive.")
+    if cutoff is not None and float(cutoff) <= 0:
+        raise ValueError("cutoff must be positive when provided.")
     if max_workers <= 0:
         raise ValueError("max_workers must be positive.")
     if frame_chunk <= 0 or coord_chunk <= 0 or k_chunk <= 0:
@@ -1171,24 +1364,43 @@ def compute_static_structure_factor_from_files(
     if not is_valid:
         raise ValueError(f"Invalid Coordinate Path: {error_message}")
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
+    if num_trajectories is not None and int(num_trajectories) <= 0:
+        raise ValueError("num_trajectories must be positive when provided.")
 
     box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
 
-    raw_k = isotropic_k_magnitudes(float(Lx), float(Ly), float(Lz), float(k_max))
+    raw_k = isotropic_k_magnitudes_three_tier(
+        float(Lx),
+        float(Ly),
+        float(Lz),
+        float(k_max_primary),
+        float(k_max_secondary),
+        float(k_max_tertiary),
+        c1=int(k_stride_primary),
+        c2=int(k_stride_secondary),
+        c3=int(k_stride_tertiary),
+    )
     if raw_k.size == 0:
-        raise ValueError("No reciprocal-vector magnitudes were generated. Increase k Max or verify the box lengths.")
-    k_vals = unique_with_tolerance(raw_k, float(tolerance))
+        raise ValueError("No reciprocal-vector magnitudes were generated. Increase the k Max values or verify the box lengths.")
+    k_vals = unique_with_tolerance(raw_k, float(shell_width))
     if k_vals.size == 0:
-        raise ValueError("No unique k values remain after applying the tolerance.")
+        raise ValueError("No unique k values remain after applying the shell width.")
 
     print("=" * 60, flush=True)
     print("ISOTROPIC STATIC STRUCTURE FACTOR CALCULATION", flush=True)
     print("=" * 60, flush=True)
     print(f"Coordinate path pattern: {coords_pattern}", flush=True)
     print(f"Output path: {output_file}", flush=True)
-    print(f"k max: {float(k_max):.8f}", flush=True)
+    print(f"k max primary: {float(k_max_primary):.8f}", flush=True)
+    print(f"k max secondary: {float(k_max_secondary):.8f}", flush=True)
+    print(f"k max tertiary: {float(k_max_tertiary):.8f}", flush=True)
+    print(f"k stride primary: {int(k_stride_primary)}", flush=True)
+    print(f"k stride secondary: {int(k_stride_secondary)}", flush=True)
+    print(f"k stride tertiary: {int(k_stride_tertiary)}", flush=True)
+    print(f"shell width: {float(shell_width):.8f}", flush=True)
+    print(f"cutoff: {float(cutoff):.8f}" if cutoff is not None else "cutoff: none", flush=True)
     print(f"shape of k vectors: {tuple(int(value) for value in np.asarray(k_vals).shape)}", flush=True)
     print(f"anticipated S(k) output shape: {(int(k_vals.size), 2)}", flush=True)
     if frame_window is None:
@@ -1203,12 +1415,16 @@ def compute_static_structure_factor_from_files(
         f"chunk sizes: frame={int(frame_chunk)}, coordinates={int(coord_chunk)}, k={int(k_chunk)}",
         flush=True,
     )
+    used_file_count = min(len(coordinate_files), int(num_trajectories)) if num_trajectories is not None else len(coordinate_files)
     print(f"coordinate files discovered: {len(coordinate_files)}", flush=True)
+    print(f"coordinate files used: {used_file_count}", flush=True)
 
     sk_values, stats = _compute_dataset_average(
         coordinate_files=coordinate_files,
         k_vals=k_vals,
         box=box,
+        cutoff=cutoff,
+        num_trajectories=num_trajectories,
         input_io_spec=input_io_spec,
         dataset_label="the coordinate dataset",
         max_workers=max_workers,
@@ -1249,10 +1465,18 @@ def compute_directional_structure_factor_from_files(
     baseDir: str,
     coords_pattern: str,
     output_file: str,
-    k_max: float,
+    k_max_primary: float,
+    k_max_secondary: float,
+    k_max_tertiary: float,
+    k_stride_primary: int,
+    k_stride_secondary: int,
+    k_stride_tertiary: int,
     Lx: float,
     Ly: float,
     Lz: float,
+    shell_width: float,
+    cutoff: float | None = None,
+    num_trajectories: int | None = None,
     max_workers: int = 1,
     frame_chunk: int = 10,
     coord_chunk: int = 256,
@@ -1263,8 +1487,16 @@ def compute_directional_structure_factor_from_files(
     active_axes: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     overall_start = time.time()
-    if k_max <= 0:
-        raise ValueError("k_max must be positive.")
+    if k_max_primary < 0 or k_max_secondary <= 0 or k_max_tertiary <= 0:
+        raise ValueError("k max values must satisfy k_max_primary >= 0, k_max_secondary > 0, and k_max_tertiary > 0.")
+    if k_max_primary > k_max_secondary or k_max_secondary > k_max_tertiary:
+        raise ValueError("k max values must satisfy k_max_primary <= k_max_secondary <= k_max_tertiary.")
+    if k_stride_primary <= 0 or k_stride_secondary <= 0 or k_stride_tertiary <= 0:
+        raise ValueError("k stride values must be positive integers.")
+    if shell_width <= 0:
+        raise ValueError("shell_width must be positive.")
+    if cutoff is not None and float(cutoff) <= 0:
+        raise ValueError("cutoff must be positive when provided.")
     if max_workers <= 0:
         raise ValueError("max_workers must be positive.")
     if frame_chunk <= 0 or coord_chunk <= 0 or k_chunk <= 0:
@@ -1274,29 +1506,46 @@ def compute_directional_structure_factor_from_files(
     if not is_valid:
         raise ValueError(f"Invalid Coordinate Path: {error_message}")
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
+    if num_trajectories is not None and int(num_trajectories) <= 0:
+        raise ValueError("num_trajectories must be positive when provided.")
 
     box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
 
-    k_vectors_array = directional_k_vectors(
+    k_vectors_array = directional_k_vectors_three_tier(
         float(Lx),
         float(Ly),
         float(Lz),
-        float(k_max),
+        float(k_max_primary),
+        float(k_max_secondary),
+        float(k_max_tertiary),
+        c1=int(k_stride_primary),
+        c2=int(k_stride_secondary),
+        c3=int(k_stride_tertiary),
         active_axes=active_axes,
     )
     if k_vectors_array.shape[0] == 0:
-        raise ValueError("No directional k vectors were generated. Increase k Max or verify the selected directions.")
+        raise ValueError("No directional k vectors were generated. Increase the k Max values or verify the selected directions.")
 
     print("=" * 60, flush=True)
     print("DIRECTIONAL STATIC STRUCTURE FACTOR CALCULATION", flush=True)
     print("=" * 60, flush=True)
     print(f"Coordinate path pattern: {coords_pattern}", flush=True)
     print(f"Output path: {output_file}", flush=True)
-    print(f"k max: {float(k_max):.8f}", flush=True)
+    print(f"k max primary: {float(k_max_primary):.8f}", flush=True)
+    print(f"k max secondary: {float(k_max_secondary):.8f}", flush=True)
+    print(f"k max tertiary: {float(k_max_tertiary):.8f}", flush=True)
+    print(f"k stride primary: {int(k_stride_primary)}", flush=True)
+    print(f"k stride secondary: {int(k_stride_secondary)}", flush=True)
+    print(f"k stride tertiary: {int(k_stride_tertiary)}", flush=True)
+    print(f"shell width: {float(shell_width):.8f}", flush=True)
+    print(f"cutoff: {float(cutoff):.8f}" if cutoff is not None else "cutoff: none", flush=True)
     print(f"directional k vectors: {int(k_vectors_array.shape[0])}", flush=True)
     print(f"anticipated directional S(k) output shape: {(int(k_vectors_array.shape[0]), 5)}", flush=True)
+    used_file_count = min(len(coordinate_files), int(num_trajectories)) if num_trajectories is not None else len(coordinate_files)
+    print(f"coordinate files discovered: {len(coordinate_files)}", flush=True)
+    print(f"coordinate files used: {used_file_count}", flush=True)
     if frame_window is None:
         print("trajectory desired length: full trajectory", flush=True)
     else:
@@ -1309,6 +1558,8 @@ def compute_directional_structure_factor_from_files(
         coordinate_files=coordinate_files,
         k_vectors_array=k_vectors_array,
         box=box,
+        cutoff=cutoff,
+        num_trajectories=num_trajectories,
         input_io_spec=input_io_spec,
         dataset_label="the directional coordinate dataset",
         max_workers=max_workers,
@@ -1357,11 +1608,18 @@ def compute_k_component_structure_factors_from_files(
     coords_pattern: str,
     output_file: str,
     components_selection: str,
-    k_max: float,
+    k_max_primary: float,
+    k_max_secondary: float,
+    k_max_tertiary: float,
+    k_stride_primary: int,
+    k_stride_secondary: int,
+    k_stride_tertiary: int,
     Lx: float,
     Ly: float,
     Lz: float,
-    tolerance: float,
+    shell_width: float,
+    cutoff: float | None = None,
+    num_trajectories: int | None = None,
     max_workers: int = 1,
     frame_chunk: int = 10,
     coord_chunk: int = 256,
@@ -1372,19 +1630,36 @@ def compute_k_component_structure_factors_from_files(
 ) -> dict[str, Any]:
     components = parse_k_component_selection(components_selection)
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
+    if num_trajectories is not None and int(num_trajectories) <= 0:
+        raise ValueError("num_trajectories must be positive when provided.")
     box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
+    if k_max_primary < 0 or k_max_secondary <= 0 or k_max_tertiary <= 0:
+        raise ValueError("k max values must satisfy k_max_primary >= 0, k_max_secondary > 0, and k_max_tertiary > 0.")
+    if k_max_primary > k_max_secondary or k_max_secondary > k_max_tertiary:
+        raise ValueError("k max values must satisfy k_max_primary <= k_max_secondary <= k_max_tertiary.")
+    if k_stride_primary <= 0 or k_stride_secondary <= 0 or k_stride_tertiary <= 0:
+        raise ValueError("k stride values must be positive integers.")
+    if shell_width <= 0:
+        raise ValueError("shell_width must be positive.")
+    if cutoff is not None and float(cutoff) <= 0:
+        raise ValueError("cutoff must be positive when provided.")
 
     results: list[dict[str, Any]] = []
     for axes in components:
         label = component_label(axes)
         component_output_file = _component_output_path(output_file, label, len(components))
-        k_vectors_array = directional_k_vectors(
+        k_vectors_array = directional_k_vectors_three_tier(
             float(Lx),
             float(Ly),
             float(Lz),
-            float(k_max),
+            float(k_max_primary),
+            float(k_max_secondary),
+            float(k_max_tertiary),
+            c1=int(k_stride_primary),
+            c2=int(k_stride_secondary),
+            c3=int(k_stride_tertiary),
             active_axes=axes,
         )
         if k_vectors_array.shape[0] == 0:
@@ -1398,6 +1673,8 @@ def compute_k_component_structure_factors_from_files(
             coordinate_files=coordinate_files,
             k_vectors_array=k_vectors_array,
             box=box,
+            cutoff=cutoff,
+            num_trajectories=num_trajectories,
             input_io_spec=input_io_spec,
             dataset_label=f"the {label} coordinate dataset",
             max_workers=max_workers,
@@ -1413,7 +1690,7 @@ def compute_k_component_structure_factors_from_files(
             output_array = np.column_stack((axis_k, sk_values))
         else:
             k_magnitudes = np.linalg.norm(k_vectors_array, axis=1)
-            axis_k, sk_values = _aggregate_by_tolerance(k_magnitudes, sk_values, float(tolerance))
+            axis_k, sk_values = _aggregate_by_tolerance(k_magnitudes, sk_values, float(shell_width))
             output_array = np.column_stack((axis_k, sk_values))
 
         resolved_output_file = _resolve_output_path(baseDir, component_output_file)

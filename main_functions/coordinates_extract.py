@@ -213,7 +213,7 @@ def _finalize_binary_coordinate_output(output_file, output_io_spec):
     os.remove(raw_output_file)
     os.remove(shape_file)
 
-def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, vmd=None, max_workers=None, dcd_indices=None, common_term="", stride=1, wrap_settings=None, output_io_spec=None):
+def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, save_com=False, grouping_unit="residue", vmd=None, max_workers=None, dcd_indices=None, common_term="", stride=1, wrap_settings=None, output_io_spec=None):
     """
     Extracts raw XYZ coordinates from a series of DCD trajectories using VMD in parallel,
     by generating per-segment Tcl scripts, running them in batch, and saving
@@ -248,6 +248,10 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
         indices `0` through `num_dcd-1`.
     target_selection : str
         VMD atom selection string (e.g., "resname WAT and residue 0 to 999", "water", "protein").
+    save_com : bool, optional
+        If True, save one center of mass per grouping unit instead of raw atom coordinates.
+    grouping_unit : str, optional
+        Grouping unit used when save_com=True. One of residue, chain, segname.
     vmd : str
         The path to the VMD executable.
     max_workers : int, optional
@@ -322,9 +326,15 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
     print(f"Common term: {common_term}")
     print(f"Number of DCDs: {num_dcd}")
     print(f"Target selection: {target_selection}")
+    print(f"Save COM: {save_com}")
+    if save_com:
+        print(f"COM grouping unit: {grouping_unit}")
     print(f"VMD executable: {vmd}")
     print(f"Stride: {stride}")
     print(f"Wrap enabled: {bool((wrap_settings or {}).get('enabled'))}")
+
+    if save_com and grouping_unit not in {"residue", "chain", "segname"}:
+        raise ValueError("grouping_unit must be one of residue, chain, segname when save_com=True")
 
     # Validate stride
     try:
@@ -398,6 +408,8 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
             dcd_pattern,
             output_pattern,
             target_selection,
+            save_com,
+            grouping_unit,
             common_term,
             stride,
             wrap_settings,
@@ -469,6 +481,8 @@ def _write_tcl_script(
     dcd_pattern,
     output_pattern,
     target_selection,
+    save_com=False,
+    grouping_unit="residue",
     common_term="",
     stride=1,
     wrap_settings=None,
@@ -597,7 +611,21 @@ def _write_tcl_script(
     if text_output:
         output_header_block = ""
         output_open_block = f'set outfile [open "{_tcl_quote(output_full_path)}" w]'
-        output_frame_block = f"""
+        if save_com:
+            output_frame_block = f"""
+    set line_parts [list]
+    foreach group_sel $group_sels {{
+        $group_sel frame $frame
+        set center [measure center $group_sel weight mass]
+        foreach value $center {{
+            lappend line_parts [format "{text_format}" $value]
+        }}
+    }}
+    puts $outfile [join $line_parts " "]
+"""
+            output_summary_label = "Text COM output written to"
+        else:
+            output_frame_block = f"""
     $sel frame $frame
     set coords [$sel get {{x y z}}]
     set line_parts [list]
@@ -608,7 +636,7 @@ def _write_tcl_script(
     }}
     puts $outfile [join $line_parts " "]
 """
-        output_summary_label = "Text output written to"
+            output_summary_label = "Text output written to"
     else:
         raw_binary_path = _raw_binary_output_path(output_full_path)
         binary_shape_path = _raw_binary_shape_path(output_full_path)
@@ -616,15 +644,40 @@ def _write_tcl_script(
             f'set outfile [open "{_tcl_quote(raw_binary_path)}" w]',
             "fconfigure $outfile -translation binary -encoding binary",
         ])
+        if save_com:
+            column_expr = "$num_groups * 3"
+        else:
+            column_expr = "$num_atoms * 3"
         output_header_block = f"""
 # Persist raw float32 coordinates and let Python finalize the NumPy container.
 set output_frames [expr {{($num_frames + $stride - 1) / $stride}}]
-set num_columns [expr {{$num_atoms * 3}}]
+set num_columns [expr {{{column_expr}}}]
 set shapefile [open "{_tcl_quote(binary_shape_path)}" w]
 puts $shapefile "$output_frames $num_columns"
 close $shapefile
 """
-        output_frame_block = """
+        if save_com:
+            output_frame_block = """
+    set binary_chunk ""
+    set chunk_groups 0
+    foreach group_sel $group_sels {
+        $group_sel frame $frame
+        set center [measure center $group_sel weight mass]
+        append binary_chunk [binary format r3 $center]
+        incr chunk_groups
+        if {$chunk_groups >= 4096} {
+            puts -nonewline $outfile $binary_chunk
+            set binary_chunk ""
+            set chunk_groups 0
+        }
+    }
+    if {$chunk_groups > 0} {
+        puts -nonewline $outfile $binary_chunk
+    }
+"""
+            output_summary_label = "Raw binary COM output written to"
+        else:
+            output_frame_block = """
     $sel frame $frame
     set coords [$sel get {x y z}]
     
@@ -644,7 +697,38 @@ close $shapefile
         puts -nonewline $outfile $binary_chunk
     }
 """
-        output_summary_label = "Raw binary coordinate output written to"
+            output_summary_label = "Raw binary coordinate output written to"
+
+    if save_com:
+        group_setup_block = f"""
+set grouping_unit "{_tcl_quote(grouping_unit)}"
+set atom_indices [$sel get index]
+set atom_groups [$sel get {grouping_unit}]
+set group_order [list]
+set grouped_indices [dict create]
+foreach atom_index $atom_indices group_value $atom_groups {{
+    set group_key [list $group_value]
+    if {{![dict exists $grouped_indices $group_key]}} {{
+        lappend group_order $group_key
+        dict set grouped_indices $group_key [list]
+    }}
+    dict lappend grouped_indices $group_key $atom_index
+}}
+set group_sels [list]
+foreach group_key $group_order {{
+    set group_indices [dict get $grouped_indices $group_key]
+    set group_sel [atomselect $molid "index [join $group_indices {{ }}]"]
+    lappend group_sels $group_sel
+}}
+set num_groups [llength $group_sels]
+puts "Resolved $num_groups COM group(s) using $grouping_unit"
+if {{$num_groups == 0}} {{
+    puts "ERROR: No COM groups were resolved from the selected atoms"
+    exit 1
+}}
+"""
+    else:
+        group_setup_block = ""
     
     with open(f"writenCodes/{tcl_filename}", "w") as f:
         f.write(f"""# Optimized coordinate extraction script for chunk {i}
@@ -696,6 +780,7 @@ if {{$num_atoms == 0}} {{
     exit 1
 }}
 
+{group_setup_block}
 {output_header_block}
 
 # Extract coordinates for all frames
@@ -721,6 +806,11 @@ for {{set frame 0}} {{$frame < $num_frames}} {{incr frame $stride}} {{
 }}
 
 $sel delete
+if {{[info exists group_sels]}} {{
+    foreach group_sel $group_sels {{
+        $group_sel delete
+    }}
+}}
 close $outfile
 mol delete $molid
 
