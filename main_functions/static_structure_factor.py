@@ -394,6 +394,519 @@ def _apply_frame_window(coords: np.ndarray, frame_window: tuple[int, int | None,
     return sliced
 
 
+def _load_charge_values(
+    charge_file: str,
+    input_io_spec: dict[str, Any] | None,
+    delete_index: int | None,
+) -> np.ndarray:
+    values = load_numeric_array(
+        charge_file,
+        input_io_spec,
+        default_mode="text",
+        default_precision="double",
+    )
+    charge_array = np.asarray(values, dtype=np.float64)
+    if charge_array.ndim == 2 and charge_array.shape[1] > 1:
+        charge_values = charge_array[:, 1]
+    else:
+        charge_values = charge_array.reshape(-1)
+    if delete_index is not None:
+        charge_values = np.delete(charge_values, int(delete_index), axis=0)
+    if charge_values.size <= 0:
+        raise ValueError("Charge values file produced an empty charge array.")
+    return np.asarray(charge_values, dtype=np.float64)
+
+
+def _prepare_xyz_frames(
+    array: np.ndarray,
+    *,
+    name: str,
+    delete_index: int | None = None,
+) -> np.ndarray:
+    coords, _ = _prepare_coordinate_array(array)
+    coords_3d = np.asarray(coords, dtype=np.float64)
+    if coords_3d.ndim == 2:
+        coords_3d = coords_3d.reshape(coords_3d.shape[0], coords_3d.shape[1] // 3, 3)
+    if coords_3d.ndim != 3 or coords_3d.shape[2] != 3:
+        raise ValueError(f"{name} must be shaped as (frames, atoms, 3) or (frames, 3*atoms).")
+    if delete_index is not None:
+        coords_3d = np.delete(coords_3d, int(delete_index), axis=1)
+    if int(coords_3d.shape[1]) <= 0:
+        raise ValueError(f"{name} has no points after applying the optional deletion.")
+    return np.ascontiguousarray(coords_3d, dtype=np.float64)
+
+
+def _normalize_vectors(vectors: np.ndarray, *, name: str) -> np.ndarray:
+    norms = np.linalg.norm(vectors, axis=2, keepdims=True)
+    if np.any(norms <= 0):
+        raise ValueError(f"Found zero-magnitude vector in {name}.")
+    return np.ascontiguousarray(vectors / norms, dtype=np.float64)
+
+
+def _build_khat(k_vectors_array: np.ndarray) -> np.ndarray:
+    k_vectors_use = np.asarray(k_vectors_array, dtype=np.float64)
+    magnitudes = np.linalg.norm(k_vectors_use, axis=1, keepdims=True)
+    khat = np.zeros_like(k_vectors_use, dtype=np.float64)
+    valid = magnitudes[:, 0] > 0.0
+    khat[valid] = k_vectors_use[valid] / magnitudes[valid]
+    return khat
+
+
+def charge_dipole_k_vectors_two_tier(
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    kmax1: float,
+    kmax2: float,
+    c1: int = 1,
+    c2: int = 1,
+    dtype: Any = np.float64,
+    include_zero: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    if kmax1 < 0 or kmax2 <= 0:
+        raise ValueError("kmax values must satisfy kmax1 >= 0 and kmax2 > 0.")
+    if kmax1 > kmax2:
+        raise ValueError("kmax1 must be less than or equal to kmax2.")
+    if int(c1) <= 0 or int(c2) <= 0:
+        raise ValueError("k stride values must be positive integers.")
+
+    two_pi = np.array(2.0 * np.pi, dtype=dtype)
+    nxmax = int(np.ceil(float(kmax2) * float(Lx) / float(two_pi)))
+    nymax = int(np.ceil(float(kmax2) * float(Ly) / float(two_pi)))
+    nzmax = int(np.ceil(float(kmax2) * float(Lz) / float(two_pi)))
+
+    kmags: list[float] = []
+    kvecs: list[tuple[float, float, float]] = []
+    seen: set[tuple[int, int, int]] = set()
+
+    for kmin, kmax, stride in ((0.0, float(kmax1), int(c1)), (float(kmax1), float(kmax2), int(c2))):
+        for nx in range(-nxmax, nxmax + 1, stride):
+            for ny in range(-nymax, nymax + 1, stride):
+                for nz in range(-nzmax, nzmax + 1, stride):
+                    if not include_zero and nx == 0 and ny == 0 and nz == 0:
+                        continue
+                    index_triplet = (int(nx), int(ny), int(nz))
+                    if index_triplet in seen:
+                        continue
+
+                    kvec = two_pi * np.array(
+                        [nx / float(Lx), ny / float(Ly), nz / float(Lz)],
+                        dtype=dtype,
+                    )
+                    kmag = float(np.linalg.norm(kvec))
+                    if kmin <= kmag <= kmax and (kmin == 0.0 or kmag > kmin):
+                        kmags.append(kmag)
+                        kvecs.append((float(kvec[0]), float(kvec[1]), float(kvec[2])))
+                        seen.add(index_triplet)
+
+    if not kmags:
+        return np.empty(0, dtype=dtype), np.empty((0, 3), dtype=dtype)
+
+    k_mags = np.asarray(kmags, dtype=dtype)
+    k_vectors_array = np.asarray(kvecs, dtype=dtype)
+    sort_order = np.argsort(k_mags)
+    return k_mags[sort_order], k_vectors_array[sort_order]
+
+
+def _shell_average_complex(k_magnitudes: np.ndarray, values: np.ndarray, dk: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    k_magnitudes = np.asarray(k_magnitudes, dtype=np.float64)
+    complex_values = np.asarray(values, dtype=np.complex128)
+    if k_magnitudes.size != complex_values.size:
+        raise ValueError("k magnitudes and charge-dipole values must have the same size.")
+    if float(dk) <= 0:
+        raise ValueError("dk_shell must be positive.")
+    if k_magnitudes.size == 0:
+        return (
+            np.empty(0, dtype=np.float64),
+            np.empty(0, dtype=np.complex128),
+            np.empty(0, dtype=np.int64),
+        )
+
+    labels = np.round(k_magnitudes / float(dk)).astype(np.int64)
+    unique_labels = np.unique(labels)
+    k_shell = np.empty(unique_labels.size, dtype=np.float64)
+    value_shell = np.empty(unique_labels.size, dtype=np.complex128)
+    counts = np.empty(unique_labels.size, dtype=np.int64)
+
+    for idx, label in enumerate(unique_labels):
+        mask = labels == label
+        k_shell[idx] = float(np.mean(k_magnitudes[mask]))
+        value_shell[idx] = np.mean(complex_values[mask])
+        counts[idx] = int(np.sum(mask))
+
+    return k_shell, value_shell, counts
+
+
+def charge_dipole_structure_factor_directional(
+    k_vectors_array: np.ndarray,
+    charge_positions: np.ndarray,
+    charge_values: np.ndarray,
+    dipole_positions: np.ndarray,
+    dipole_directions: np.ndarray,
+    cutoff: float | None = None,
+    dtype: Any = np.float64,
+) -> np.ndarray:
+    k_vectors_use = np.asarray(k_vectors_array, dtype=dtype)
+    rq = np.asarray(charge_positions, dtype=dtype)
+    z = np.asarray(charge_values, dtype=dtype)
+    rp = np.asarray(dipole_positions, dtype=dtype)
+    ehat = np.asarray(dipole_directions, dtype=dtype)
+
+    if rq.ndim != 3 or rq.shape[2] != 3:
+        raise ValueError("Charge positions must have shape (frames, charges, 3).")
+    if rp.ndim != 3 or rp.shape[2] != 3:
+        raise ValueError("Dipole positions must have shape (frames, dipoles, 3).")
+    if ehat.shape != rp.shape:
+        raise ValueError("Dipole directions must match the dipole-position shape.")
+    if z.ndim != 1:
+        raise ValueError("Charge values must be one-dimensional.")
+    if rq.shape[1] != z.shape[0]:
+        raise ValueError("Charge-value count must match the number of charge positions.")
+    if rq.shape[0] != rp.shape[0]:
+        raise ValueError("Charge and dipole trajectories must have the same number of frames.")
+    if k_vectors_use.ndim != 2 or k_vectors_use.shape[1] != 3:
+        raise ValueError("k_vectors_array must have shape (n_k, 3).")
+    if k_vectors_use.shape[0] <= 0:
+        raise ValueError("At least one charge-dipole k vector is required.")
+
+    khat = _build_khat(k_vectors_use)
+    cutoff_sq = -1.0 if cutoff is None else float(cutoff) ** 2
+
+    out_re = np.empty(k_vectors_use.shape[0], dtype=np.float64)
+    out_im = np.empty(k_vectors_use.shape[0], dtype=np.float64)
+    frame_count = int(rq.shape[0])
+    dipole_count = int(rp.shape[1])
+    inv_frame = 1.0 / float(frame_count)
+    inv_dipole_count = 1.0 / float(dipole_count)
+
+    for k_index, (kvec, khat_vec) in enumerate(zip(k_vectors_use, khat, strict=False)):
+        kx, ky, kz = (float(kvec[0]), float(kvec[1]), float(kvec[2]))
+        khx, khy, khz = (float(khat_vec[0]), float(khat_vec[1]), float(khat_vec[2]))
+        acc_re = 0.0
+        acc_im = 0.0
+
+        for frame_index in range(frame_count):
+            if cutoff_sq > 0.0:
+                for charge_index in range(int(rq.shape[1])):
+                    zq = float(z[charge_index])
+                    charge_phase = (
+                        kx * float(rq[frame_index, charge_index, 0])
+                        + ky * float(rq[frame_index, charge_index, 1])
+                        + kz * float(rq[frame_index, charge_index, 2])
+                    )
+                    cos_q = float(np.cos(charge_phase))
+                    sin_q = float(np.sin(charge_phase))
+
+                    for dipole_index in range(dipole_count):
+                        dx = float(rq[frame_index, charge_index, 0] - rp[frame_index, dipole_index, 0])
+                        dy = float(rq[frame_index, charge_index, 1] - rp[frame_index, dipole_index, 1])
+                        dz = float(rq[frame_index, charge_index, 2] - rp[frame_index, dipole_index, 2])
+                        dist_sq = dx * dx + dy * dy + dz * dz
+                        if dist_sq > cutoff_sq:
+                            continue
+
+                        dipole_phase = (
+                            kx * float(rp[frame_index, dipole_index, 0])
+                            + ky * float(rp[frame_index, dipole_index, 1])
+                            + kz * float(rp[frame_index, dipole_index, 2])
+                        )
+                        cos_p = float(np.cos(dipole_phase))
+                        sin_p = float(np.sin(dipole_phase))
+                        weight = (
+                            khx * float(ehat[frame_index, dipole_index, 0])
+                            + khy * float(ehat[frame_index, dipole_index, 1])
+                            + khz * float(ehat[frame_index, dipole_index, 2])
+                        )
+                        cos_diff = cos_p * cos_q + sin_p * sin_q
+                        sin_diff = sin_p * cos_q - cos_p * sin_q
+                        acc_re -= zq * weight * sin_diff
+                        acc_im += zq * weight * cos_diff
+            else:
+                q_cos = 0.0
+                q_sin = 0.0
+                p_cos = 0.0
+                p_sin = 0.0
+
+                for charge_index in range(int(rq.shape[1])):
+                    charge_phase = (
+                        kx * float(rq[frame_index, charge_index, 0])
+                        + ky * float(rq[frame_index, charge_index, 1])
+                        + kz * float(rq[frame_index, charge_index, 2])
+                    )
+                    zq = float(z[charge_index])
+                    q_cos += zq * float(np.cos(charge_phase))
+                    q_sin += zq * float(np.sin(charge_phase))
+
+                for dipole_index in range(dipole_count):
+                    dipole_phase = (
+                        kx * float(rp[frame_index, dipole_index, 0])
+                        + ky * float(rp[frame_index, dipole_index, 1])
+                        + kz * float(rp[frame_index, dipole_index, 2])
+                    )
+                    weight = (
+                        khx * float(ehat[frame_index, dipole_index, 0])
+                        + khy * float(ehat[frame_index, dipole_index, 1])
+                        + khz * float(ehat[frame_index, dipole_index, 2])
+                    )
+                    p_cos += weight * float(np.cos(dipole_phase))
+                    p_sin += weight * float(np.sin(dipole_phase))
+
+                acc_re += q_sin * p_cos - q_cos * p_sin
+                acc_im += q_cos * p_cos + q_sin * p_sin
+
+        out_re[k_index] = acc_re * inv_frame * inv_dipole_count
+        out_im[k_index] = acc_im * inv_frame * inv_dipole_count
+
+    return out_re + 1j * out_im
+
+
+def compute_charge_dipole_structure_factor_from_files(
+    *,
+    baseDir: str,
+    charge_values_path: str,
+    charge_coords_pattern: str,
+    dipole_positions_pattern: str,
+    dipole_vectors_pattern: str,
+    isotropic_output_file: str,
+    directional_output_file: str,
+    k_max_primary: float,
+    k_max_secondary: float,
+    k_stride_primary: int,
+    k_stride_secondary: int,
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    shell_width: float,
+    cutoff: float | None = None,
+    delete_residue_index: int | None = None,
+    frame_window: tuple[int, int | None, int] | None = None,
+    input_io_spec: dict[str, Any] | None = None,
+    output_io_spec: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    overall_start = time.time()
+    box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
+    if np.any(box <= 0):
+        raise ValueError("Lx, Ly, and Lz must all be positive.")
+    if float(k_max_primary) < 0 or float(k_max_secondary) <= 0:
+        raise ValueError("k max values must satisfy k_max_primary >= 0 and k_max_secondary > 0.")
+    if float(k_max_primary) > float(k_max_secondary):
+        raise ValueError("k_max_primary must be less than or equal to k_max_secondary.")
+    if int(k_stride_primary) <= 0 or int(k_stride_secondary) <= 0:
+        raise ValueError("k stride values must be positive integers.")
+    if float(shell_width) <= 0:
+        raise ValueError("shell_width must be positive.")
+    if cutoff is not None and float(cutoff) <= 0:
+        raise ValueError("cutoff must be positive when provided.")
+
+    for label, pattern in [
+        ("Charge Coordinates Path", charge_coords_pattern),
+        ("Dipole Positions Path", dipole_positions_pattern),
+        ("Dipole Vectors Path", dipole_vectors_pattern),
+    ]:
+        is_valid, error_message = validate_path_pattern(pattern)
+        if not is_valid:
+            raise ValueError(f"Invalid {label}: {error_message}")
+
+    charge_values_file = _resolve_data_path(baseDir, charge_values_path)
+    if not os.path.isfile(charge_values_file):
+        raise FileNotFoundError(f"Charge values file not found: {charge_values_file}")
+
+    charge_coordinate_files = _discover_coordinate_files(baseDir, charge_coords_pattern)
+    dipole_position_files = _discover_coordinate_files(baseDir, dipole_positions_pattern)
+    dipole_vector_files = _discover_coordinate_files(baseDir, dipole_vectors_pattern)
+    file_counts = {
+        "charge coordinate": len(charge_coordinate_files),
+        "dipole position": len(dipole_position_files),
+        "dipole vector": len(dipole_vector_files),
+    }
+    if len(set(file_counts.values())) != 1:
+        raise ValueError(
+            "Charge-dipole structure-factor inputs must resolve to the same number of files. "
+            f"Discovered counts: {file_counts}"
+        )
+
+    k_magnitudes, k_vectors_array = charge_dipole_k_vectors_two_tier(
+        float(Lx),
+        float(Ly),
+        float(Lz),
+        float(k_max_primary),
+        float(k_max_secondary),
+        c1=int(k_stride_primary),
+        c2=int(k_stride_secondary),
+    )
+    if k_vectors_array.shape[0] == 0:
+        raise ValueError("No charge-dipole k vectors were generated. Increase k max values or verify the box lengths.")
+
+    charge_values = _load_charge_values(charge_values_file, input_io_spec, delete_residue_index)
+    sqp_sum = np.zeros(k_vectors_array.shape[0], dtype=np.complex128)
+    total_frames = 0
+    per_file_stats: list[dict[str, Any]] = []
+
+    print("=" * 60, flush=True)
+    print("CHARGE-DIPOLE STRUCTURE FACTOR CALCULATION", flush=True)
+    print("=" * 60, flush=True)
+    print(f"Charge values path: {charge_values_path}", flush=True)
+    print(f"Charge coordinates path: {charge_coords_pattern}", flush=True)
+    print(f"Dipole positions path: {dipole_positions_pattern}", flush=True)
+    print(f"Dipole vectors path: {dipole_vectors_pattern}", flush=True)
+    print(f"Isotropic output path: {isotropic_output_file}", flush=True)
+    print(f"Directional output path: {directional_output_file}", flush=True)
+    print(f"k max primary: {float(k_max_primary):.8f}", flush=True)
+    print(f"k max secondary: {float(k_max_secondary):.8f}", flush=True)
+    print(f"k stride primary: {int(k_stride_primary)}", flush=True)
+    print(f"k stride secondary: {int(k_stride_secondary)}", flush=True)
+    print(f"directional k vectors: {int(k_vectors_array.shape[0])}", flush=True)
+    print(f"shell width: {float(shell_width):.8f}", flush=True)
+    print(f"delete residue index: {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
+    if frame_window is None:
+        print("trajectory desired length: full trajectory", flush=True)
+    else:
+        print(
+            f"trajectory desired length: range({frame_window[0]}, {frame_window[1]}, {frame_window[2]})",
+            flush=True,
+        )
+
+    for file_index, (rq_file, rp_file, mu_file) in enumerate(
+        zip(charge_coordinate_files, dipole_position_files, dipole_vector_files, strict=False),
+        start=1,
+    ):
+        print(f"\nProcessing charge-dipole file set {file_index}/{len(charge_coordinate_files)}", flush=True)
+        print(f"  charge coordinates: {rq_file}", flush=True)
+        print(f"  dipole positions:   {rp_file}", flush=True)
+        print(f"  dipole vectors:     {mu_file}", flush=True)
+
+        charge_position_array = load_numeric_array(
+            rq_file,
+            input_io_spec,
+            default_mode="text",
+            default_precision="double",
+        )
+        dipole_position_array = load_numeric_array(
+            rp_file,
+            input_io_spec,
+            default_mode="text",
+            default_precision="double",
+        )
+        dipole_vector_array = load_numeric_array(
+            mu_file,
+            input_io_spec,
+            default_mode="text",
+            default_precision="double",
+        )
+
+        charge_positions = _prepare_xyz_frames(
+            charge_position_array,
+            name=str(rq_file),
+            delete_index=delete_residue_index,
+        )
+        dipole_positions = _prepare_xyz_frames(
+            dipole_position_array,
+            name=str(rp_file),
+        )
+        dipole_vectors = _prepare_xyz_frames(
+            dipole_vector_array,
+            name=str(mu_file),
+        )
+
+        charge_positions = _apply_frame_window(charge_positions, frame_window)
+        dipole_positions = _apply_frame_window(dipole_positions, frame_window)
+        dipole_vectors = _apply_frame_window(dipole_vectors, frame_window)
+
+        frame_counts = (
+            int(charge_positions.shape[0]),
+            int(dipole_positions.shape[0]),
+            int(dipole_vectors.shape[0]),
+        )
+        frame_count = min(frame_counts)
+        if frame_count <= 0:
+            raise ValueError(f"No frames available after preprocessing for file set {file_index}.")
+        if len(set(frame_counts)) != 1:
+            print(
+                f"  frame mismatch charge/dipole-pos/dipole-vec={frame_counts}, using min={frame_count}",
+                flush=True,
+            )
+
+        charge_positions = np.ascontiguousarray(charge_positions[:frame_count], dtype=np.float64)
+        dipole_positions = np.ascontiguousarray(dipole_positions[:frame_count], dtype=np.float64)
+        dipole_vectors = np.ascontiguousarray(dipole_vectors[:frame_count], dtype=np.float64)
+        dipole_directions = _normalize_vectors(dipole_vectors, name=str(mu_file))
+
+        if int(charge_positions.shape[1]) != int(charge_values.shape[0]):
+            raise ValueError(
+                "Charge-value count mismatch for file set "
+                f"{file_index}: len(Z)={int(charge_values.shape[0])} but charge positions contain "
+                f"{int(charge_positions.shape[1])} sites."
+            )
+
+        directional_values = charge_dipole_structure_factor_directional(
+            k_vectors_array,
+            charge_positions,
+            charge_values,
+            dipole_positions,
+            dipole_directions,
+            cutoff=cutoff,
+        )
+        sqp_sum += directional_values * float(frame_count)
+        total_frames += int(frame_count)
+        per_file_stats.append(
+            {
+                "charge_coordinate_file": rq_file,
+                "dipole_position_file": rp_file,
+                "dipole_vector_file": mu_file,
+                "frame_count": int(frame_count),
+            }
+        )
+        print(f"  accumulated frames: {frame_count}", flush=True)
+
+    if total_frames <= 0:
+        raise ValueError("No frames were accumulated for the charge-dipole structure-factor calculation.")
+
+    directional_average = sqp_sum / float(total_frames)
+    k_shell, isotropic_shell, shell_counts = _shell_average_complex(k_magnitudes, directional_average, float(shell_width))
+
+    isotropic_output_path = _resolve_output_path(baseDir, isotropic_output_file)
+    directional_output_path = _resolve_output_path(baseDir, directional_output_file)
+    isotropic_output_array = np.column_stack((k_shell, isotropic_shell.real, isotropic_shell.imag, shell_counts))
+    directional_output_array = np.column_stack((k_vectors_array, k_magnitudes, directional_average.real, directional_average.imag))
+
+    save_numeric_array(
+        isotropic_output_path,
+        isotropic_output_array,
+        output_io_spec,
+        default_mode="text",
+        default_precision="double",
+    )
+    save_numeric_array(
+        directional_output_path,
+        directional_output_array,
+        output_io_spec,
+        default_mode="text",
+        default_precision="double",
+    )
+
+    overall_elapsed = time.time() - overall_start
+    print(f"\nSaved isotropic charge-dipole output: {isotropic_output_path}", flush=True)
+    print(f"Saved directional charge-dipole output: {directional_output_path}", flush=True)
+    print(f"total file sets used: {len(per_file_stats)}", flush=True)
+    print(f"total frames used: {total_frames}", flush=True)
+    print(f"total elapsed time: {overall_elapsed:.2f} s", flush=True)
+
+    return {
+        "directional_k_count": int(k_vectors_array.shape[0]),
+        "isotropic_shell_count": int(k_shell.shape[0]),
+        "k_vectors": k_vectors_array,
+        "k_magnitudes": k_magnitudes,
+        "directional_values": directional_average,
+        "k_shell": k_shell,
+        "isotropic_values": isotropic_shell,
+        "shell_counts": shell_counts,
+        "total_frames": int(total_frames),
+        "isotropic_output_file": isotropic_output_path,
+        "directional_output_file": directional_output_path,
+        "per_file_stats": per_file_stats,
+    }
+
+
 def _compute_dataset_average(
     *,
     coordinate_files: list[str],
