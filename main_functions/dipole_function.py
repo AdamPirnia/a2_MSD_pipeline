@@ -10,9 +10,7 @@ import os
 import time
 import subprocess
 import tempfile
-import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import warnings
 try:
     from .numeric_io import load_numeric_array, save_numeric_array
 except ImportError:

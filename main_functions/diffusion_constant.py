@@ -29,9 +29,13 @@ def _resolve_vacf_files(vacf_path):
     return [Path(p) for p in sorted(glob(str(vacf_path)))]
 
 
-def _extract_vacf_series(file_path, time_axis_exists=False):
+def _extract_vacf_series(file_path, time_axis_exists=False, stride=1):
     data = np.loadtxt(file_path)
     data = np.asarray(data)
+
+    stride = int(stride)
+    if stride <= 0:
+        raise ValueError("VACF stride must be a positive integer.")
 
     if data.ndim == 0:
         series = np.array([float(data)], dtype=np.float64)
@@ -40,12 +44,12 @@ def _extract_vacf_series(file_path, time_axis_exists=False):
     if data.ndim == 1:
         if time_axis_exists:
             raise ValueError(f"VACF file {file_path} must contain at least two columns when 'Time Axis Exist' is enabled.")
-        return None, data.astype(np.float64)
+        return None, data.astype(np.float64)[::stride]
 
     if time_axis_exists:
-        return data[:, 0].astype(np.float64), data[:, 1].astype(np.float64)
+        return data[::stride, 0].astype(np.float64), data[::stride, 1].astype(np.float64)
 
-    return None, data[:, -1].astype(np.float64)
+    return None, data[::stride, -1].astype(np.float64)
 
 
 def _extract_scalar_series(file_path):
@@ -61,9 +65,13 @@ def _extract_scalar_series(file_path):
     return data[:, -1].astype(np.float64)
 
 
-def _extract_time_value_series(file_path, label, time_axis_exists=False):
+def _extract_time_value_series(file_path, label, time_axis_exists=False, stride=1):
     data = np.loadtxt(file_path)
     data = np.asarray(data)
+
+    stride = int(stride)
+    if stride <= 0:
+        raise ValueError(f"{label} stride must be a positive integer.")
 
     if data.ndim == 0:
         return None, np.array([float(data)], dtype=np.float64)
@@ -71,12 +79,12 @@ def _extract_time_value_series(file_path, label, time_axis_exists=False):
     if data.ndim == 1:
         if time_axis_exists:
             raise ValueError(f"{label} file {file_path} must contain at least two columns when 'Time Axis Exist' is enabled.")
-        return None, data.astype(np.float64)
+        return None, data.astype(np.float64)[::stride]
 
     if time_axis_exists:
-        return data[:, 0].astype(np.float64), data[:, 1].astype(np.float64)
+        return data[::stride, 0].astype(np.float64), data[::stride, 1].astype(np.float64)
 
-    return None, np.asarray(data, dtype=np.float64).reshape(-1)
+    return None, np.asarray(data, dtype=np.float64)[::stride].reshape(-1)
 
 
 def _resolve_analysis_file_paths(base_directory, vacf_path, num_vacf=None):
@@ -163,6 +171,7 @@ def compute_diffusion_from_msd_file(
     base_directory="",
     time_axis_exists=False,
     time_axis_unit="ps",
+    msd_stride=1,
 ):
     if not time_axis_exists and time_step_ps <= 0:
         raise ValueError("time_step_ps must be positive.")
@@ -176,6 +185,7 @@ def compute_diffusion_from_msd_file(
         file_path,
         label="MSD",
         time_axis_exists=time_axis_exists,
+        stride=msd_stride,
     )
     if msd_series.size == 0:
         raise ValueError(f"MSD file is empty: {file_path}")
@@ -195,6 +205,7 @@ def compute_diffusion_from_msd_file(
         "msd_time_step_ps": float(time_step_ps),
         "msd_time_axis_exists": bool(time_axis_exists),
         "msd_time_axis_unit": str(time_axis_unit),
+        "msd_stride": int(msd_stride),
         "msd_fit_slope_ang2_per_ps": slope_ang2_per_ps,
         "msd_diffusion_constant_ang2_per_ps": diffusion_constant_ang2_per_ps,
         "msd_diffusion_constant_cm2_per_s": float(diffusion_constant_ang2_per_ps * 1.0e-4),
@@ -216,6 +227,8 @@ def compute_diffusion_from_vacf_files(
     vacf_enabled=True,
     msd_enabled=False,
     msd_path=None,
+    vacf_stride=1,
+    msd_stride=1,
     msd_time_step_ps=None,
     msd_time_axis_exists=False,
     msd_time_axis_unit="ps",
@@ -257,7 +270,7 @@ def compute_diffusion_from_vacf_files(
         velocity_scale = 1.0 if vacf_is_normalized else _velocity_scale_from_units(velocity_units)
 
         for file_path in file_paths:
-            file_time_ps, vacf = _extract_vacf_series(file_path, time_axis_exists=time_axis_exists)
+            file_time_ps, vacf = _extract_vacf_series(file_path, time_axis_exists=time_axis_exists, stride=vacf_stride)
             if vacf.size == 0:
                 continue
 
@@ -350,6 +363,7 @@ def compute_diffusion_from_vacf_files(
         "num_vacf_requested": None if num_vacf is None else int(num_vacf),
         "vacf_path": str(vacf_path),
         "saved_frame_dt_ps": float(saved_frame_dt_ps),
+        "vacf_stride": int(vacf_stride),
         "time_axis_exists": bool(time_axis_exists),
         "time_axis_unit": str(time_axis_unit),
         "velocity_units": velocity_units,
@@ -380,6 +394,7 @@ def compute_diffusion_from_vacf_files(
             base_directory=base_directory,
             time_axis_exists=msd_time_axis_exists,
             time_axis_unit=msd_time_axis_unit,
+            msd_stride=msd_stride,
         )
         result.update(msd_result)
 

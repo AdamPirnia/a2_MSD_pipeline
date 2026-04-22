@@ -13,7 +13,7 @@ except ImportError:
 
 ######################################################    Parameters    
 
-def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFrames, validate_data=True, common_term="", dcd_indices=None, input_io_spec=None, output_io_spec=None):
+def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFrames, input_stride=1, validate_data=True, common_term="", dcd_indices=None, input_io_spec=None, output_io_spec=None):
     """
     Compute directional non-Gaussian parameter α_xz(t) for a set of particles
     from a series of center-of-mass (COM) trajectory files. This parameter
@@ -78,6 +78,10 @@ def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFra
     print(f"Common term: {common_term}")
     print(f"Number of DCDs: {num_dcd}")
     print(f"Particles: {partcl_num}, Min frames: {numFrames}")
+    input_stride = int(input_stride)
+    if input_stride <= 0:
+        raise ValueError("input_stride must be a positive integer.")
+    print(f"Input stride: {input_stride}")
     
     output_target_rel = expand_path_pattern(output_pattern, common_term)
     output_target = os.path.join(baseDir, output_target_rel)
@@ -148,6 +152,8 @@ def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFra
                     default_mode="text",
                     default_precision="double",
                 )
+                if input_stride > 1:
+                    data = data[::input_stride]
                 
                 # Validate frame length
                 if len(data) < numFrames:

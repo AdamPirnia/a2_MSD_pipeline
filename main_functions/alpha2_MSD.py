@@ -61,7 +61,7 @@ def validate_path_pattern(pattern):
 
 ######################################################    Parameters    
 
-def a2_MSD(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFrames, validate_data=True, common_term="", dcd_indices=None, input_io_spec=None, output_io_spec=None):
+def a2_MSD(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFrames, input_stride=1, validate_data=True, common_term="", dcd_indices=None, input_io_spec=None, output_io_spec=None):
     """
     Compute ensemble-averaged mean square displacements (MSD) and non-Gaussian
     parameter α₂(t) for a set of particles from a series of center-of-mass (COM)
@@ -137,6 +137,10 @@ def a2_MSD(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFrame
     if dcd_indices is not None:
         print(f"Processing selected DCD indices: {dcd_list}")
     print(f"Particles: {partcl_num}, Min frames: {numFrames}")
+    input_stride = int(input_stride)
+    if input_stride <= 0:
+        raise ValueError("input_stride must be a positive integer.")
+    print(f"Input stride: {input_stride}")
     
     output_target_rel = expand_path_pattern(output_pattern, common_term)
     output_target = os.path.join(baseDir, output_target_rel)
@@ -201,6 +205,8 @@ def a2_MSD(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFrame
                     default_mode="text",
                     default_precision="double",
                 )
+                if input_stride > 1:
+                    data = data[::input_stride]
                 
                 # Validate frame length
                 if len(data) < numFrames:
