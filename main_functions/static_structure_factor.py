@@ -59,6 +59,7 @@ def isotropic_structure_factor_db_density(
     k_vals: np.ndarray,
     box: np.ndarray | None = None,
     cutoff: float | None = None,
+    cell_size: float | None = None,
     frame_chunk: int = 10,
     i_chunk: int = 256,
     j_chunk: int = 256,
@@ -97,8 +98,7 @@ def isotropic_structure_factor_db_density(
     total_frames = int(r.shape[0])
     if total_frames <= 0:
         raise ValueError("Coordinate arrays must contain at least one frame.")
-    if cutoff is not None and float(cutoff) <= 0:
-        raise ValueError("cutoff must be positive when provided.")
+    cutoff, cell_size = _validate_cutoff_and_cell_size(cutoff, cell_size, label="Density structure factor")
 
     inv_pi = dtype(1.0 / np.pi)
     s_accum = np.zeros(k_vals.size, dtype=dtype)
@@ -112,6 +112,28 @@ def isotropic_structure_factor_db_density(
         for r_frame in r_chunk:
             processed_frames += 1
             pair_sum_k = np.zeros(k_vals.size, dtype=dtype)
+
+            if cutoff_sq is not None and box is not None:
+                for dr_use in _iter_cutoff_displacement_blocks(
+                    np.asarray(r_frame, dtype=np.float64),
+                    np.asarray(box, dtype=np.float64),
+                    float(cutoff),
+                    cell_size,
+                    int(i_chunk),
+                    int(j_chunk),
+                ):
+                    dist = np.sqrt(np.sum(dr_use * dr_use, axis=1))
+                    for k0 in range(0, k_vals.size, k_chunk):
+                        k1 = min(k_vals.size, k0 + k_chunk)
+                        x = np.outer(k_vals[k0:k1], dist)
+                        pair_sum_k[k0:k1] += np.sinc(x * inv_pi).sum(axis=1)
+                if include_leading_one:
+                    s_accum += 1.0 + (2.0 / natms) * pair_sum_k
+                else:
+                    s_accum += (2.0 / natms) * pair_sum_k
+                if status_logger is not None:
+                    status_logger.density(processed_frames, natms, int(k_vals.size))
+                continue
 
             for i0 in range(0, natms, i_chunk):
                 i1 = min(natms, i0 + i_chunk)
@@ -330,6 +352,7 @@ def directional_structure_factor(
     k_vectors_array: np.ndarray,
     box: np.ndarray | None = None,
     cutoff: float | None = None,
+    cell_size: float | None = None,
     frame_chunk: int = 10,
     atom_chunk: int = 256,
     k_chunk: int = 64,
@@ -370,8 +393,7 @@ def directional_structure_factor(
     total_frames = int(r.shape[0])
     if total_frames <= 0:
         raise ValueError("Coordinate arrays must contain at least one frame.")
-    if cutoff is not None and float(cutoff) <= 0:
-        raise ValueError("cutoff must be positive when provided.")
+    cutoff, cell_size = _validate_cutoff_and_cell_size(cutoff, cell_size, label="Density structure factor")
 
     s_accum = np.zeros(k_vectors_array.shape[0], dtype=np.float64)
     cutoff_sq = None if cutoff is None else float(cutoff) ** 2
@@ -397,6 +419,26 @@ def directional_structure_factor(
                         phase = np.matmul(r_frame_use[a0:a1], k_vectors_array[k0:k1].T)
                         rho += np.exp(1j * phase).sum(axis=0)
                     s_accum[k0:k1] += (rho * np.conjugate(rho)).real / float(natms)
+                continue
+
+            if box is not None:
+                pair_sum_k = np.zeros(k_vectors_array.shape[0], dtype=np.float64)
+                for dr_use in _iter_cutoff_displacement_blocks(
+                    np.asarray(r_frame_use, dtype=np.float64),
+                    np.asarray(box, dtype=np.float64),
+                    float(cutoff),
+                    cell_size,
+                    int(atom_chunk),
+                    int(atom_chunk),
+                ):
+                    for k0 in range(0, k_vectors_array.shape[0], k_chunk):
+                        k1 = min(k_vectors_array.shape[0], k0 + k_chunk)
+                        phase = np.matmul(dr_use, k_vectors_array[k0:k1].T)
+                        pair_sum_k[k0:k1] += np.cos(phase).sum(axis=0)
+
+                s_accum += 1.0 + (2.0 / float(natms)) * pair_sum_k
+                if status_logger is not None:
+                    status_logger.density(processed_frames, natms, int(k_vectors_array.shape[0]))
                 continue
 
             pair_sum_k = np.zeros(k_vectors_array.shape[0], dtype=np.float64)
@@ -589,11 +631,18 @@ def _format_elapsed_hms(elapsed_s: float) -> str:
 
 
 class _StatusLogger:
-    def __init__(self, path: str, start_epoch: float, interval_s: float = 600.0) -> None:
+    def __init__(
+        self,
+        path: str,
+        start_epoch: float,
+        interval_s: float = 600.0,
+        trajectory_index: int | None = None,
+    ) -> None:
         self.path = path
         self.start_epoch = float(start_epoch)
         self.interval_s = float(interval_s)
         self.last_emit_epoch = float(start_epoch)
+        self.trajectory_index = None if trajectory_index is None else int(trajectory_index)
         self.enabled = True
         self._warned = False
         directory = os.path.dirname(path)
@@ -626,6 +675,11 @@ class _StatusLogger:
             self.enabled = False
             self._warn_once(exc)
 
+    def _prefix(self) -> str:
+        if self.trajectory_index is None:
+            return ""
+        return f"Traj.: {self.trajectory_index}, "
+
     def density(self, num_frames: int, coords_count: int, k_count: int, *, force: bool = False) -> None:
         if not self.enabled:
             return
@@ -634,11 +688,11 @@ class _StatusLogger:
             return
         elapsed = _format_elapsed_hms(now - self.start_epoch)
         self._write(
-            "density: "
-            f"Time from beginning the calculation: {elapsed}, "
-            f"Num. Frame Calculated: {int(num_frames)}, "
-            f"Coordinates number calculated: {int(coords_count)}, "
-            f"k vectors number calculated: {int(k_count)}\n"
+            f"{self._prefix()}S(k): density: "
+            f"Time: {elapsed}, "
+            f"Num. Frame: {int(num_frames)}, "
+            f"Num. Coord: {int(coords_count)}, "
+            f"Num. k vec.: {int(k_count)}\n"
         )
         self.last_emit_epoch = now
 
@@ -658,11 +712,11 @@ class _StatusLogger:
             return
         elapsed = _format_elapsed_hms(now - self.start_epoch)
         self._write(
-            "Sqp(k): "
+            f"{self._prefix()}Sqp(k): "
             f"Time: {elapsed}, "
             f"Num. Frame: {int(num_frames)}, "
             f"Num. charge: {int(charges_count)}, "
-            f"Num. k vecs: {int(k_count)}, "
+            f"Num. k vec.: {int(k_count)}, "
             f"Num. dipoles: {int(dipoles_count)}\n"
         )
         self.last_emit_epoch = now
@@ -820,6 +874,72 @@ def _validate_cutoff_and_cell_size(
     return cutoff_value, cell_size_value
 
 
+def _resolve_three_tier_cutoffs(
+    cutoff_primary: float | None = None,
+    cutoff_secondary: float | None = None,
+    cutoff_tertiary: float | None = None,
+    *,
+    legacy_cutoff: float | None = None,
+) -> tuple[float | None, float | None, float | None]:
+    if cutoff_primary is None and cutoff_secondary is None and cutoff_tertiary is None and legacy_cutoff is not None:
+        cutoff_primary = legacy_cutoff
+        cutoff_secondary = legacy_cutoff
+        cutoff_tertiary = legacy_cutoff
+
+    cutoffs = tuple(
+        None if value is None else float(value)
+        for value in (cutoff_primary, cutoff_secondary, cutoff_tertiary)
+    )
+    for value in cutoffs:
+        if value is not None and value <= 0:
+            raise ValueError("cutoff values must be positive when provided.")
+    return cutoffs
+
+
+def _resolve_three_tier_cell_sizes(
+    cutoff_primary: float | None,
+    cutoff_secondary: float | None,
+    cutoff_tertiary: float | None,
+    cell_size_primary: float | None = None,
+    cell_size_secondary: float | None = None,
+    cell_size_tertiary: float | None = None,
+    *,
+    legacy_cell_size: float | None = None,
+) -> tuple[float | None, float | None, float | None]:
+    if cell_size_primary is None and cell_size_secondary is None and cell_size_tertiary is None and legacy_cell_size is not None:
+        cell_size_primary = legacy_cell_size
+        cell_size_secondary = legacy_cell_size
+        cell_size_tertiary = legacy_cell_size
+
+    resolved: list[float | None] = []
+    for cutoff_value, cell_size_value in (
+        (cutoff_primary, cell_size_primary),
+        (cutoff_secondary, cell_size_secondary),
+        (cutoff_tertiary, cell_size_tertiary),
+    ):
+        _, resolved_cell_size = _validate_cutoff_and_cell_size(
+            cutoff_value,
+            cell_size_value,
+            label="Structure factor",
+        )
+        resolved.append(resolved_cell_size)
+    return tuple(resolved)  # type: ignore[return-value]
+
+
+def _three_tier_masks_from_magnitudes(
+    magnitudes: np.ndarray,
+    k_max_primary: float,
+    k_max_secondary: float,
+    k_max_tertiary: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    values = np.asarray(magnitudes, dtype=np.float64)
+    return (
+        (values > 0.0) & (values <= float(k_max_primary)),
+        (values > float(k_max_primary)) & (values <= float(k_max_secondary)),
+        (values > float(k_max_secondary)) & (values <= float(k_max_tertiary)),
+    )
+
+
 def _build_periodic_cell_list(
     positions: np.ndarray,
     box: np.ndarray,
@@ -842,6 +962,104 @@ def _build_periodic_cell_list(
         cell_widths,
         {key: np.asarray(indices, dtype=np.int64) for key, indices in cells.items()},
     )
+
+
+def _cell_key_linear_index(cell: tuple[int, int, int], cell_counts: np.ndarray) -> int:
+    return (
+        int(cell[0]) * int(cell_counts[1]) * int(cell_counts[2])
+        + int(cell[1]) * int(cell_counts[2])
+        + int(cell[2])
+    )
+
+
+def _iter_cutoff_displacement_blocks(
+    positions: np.ndarray,
+    box: np.ndarray,
+    cutoff: float,
+    cell_size: float | None,
+    i_chunk: int,
+    j_chunk: int,
+) -> Any:
+    wrapped_positions, cell_counts, cell_widths, cells = _build_periodic_cell_list(
+        positions,
+        box,
+        float(cell_size if cell_size is not None else cutoff),
+    )
+    search_span = np.ceil(float(cutoff) / cell_widths).astype(int)
+    cutoff_sq = float(cutoff) ** 2
+    seen_pairs: set[tuple[int, int]] = set()
+
+    for cell in sorted(cells):
+        indices_i_all = cells[cell]
+        cell_id_i = _cell_key_linear_index(cell, cell_counts)
+        neighbor_cells: set[tuple[int, int, int]] = set()
+        for dx in range(-int(search_span[0]), int(search_span[0]) + 1):
+            for dy in range(-int(search_span[1]), int(search_span[1]) + 1):
+                for dz in range(-int(search_span[2]), int(search_span[2]) + 1):
+                    neighbor_cells.add(
+                        (
+                            int((cell[0] + dx) % cell_counts[0]),
+                            int((cell[1] + dy) % cell_counts[1]),
+                            int((cell[2] + dz) % cell_counts[2]),
+                        )
+                    )
+
+        for neighbor in sorted(neighbor_cells):
+            if neighbor not in cells:
+                continue
+            cell_id_j = _cell_key_linear_index(neighbor, cell_counts)
+            pair_key = (min(cell_id_i, cell_id_j), max(cell_id_i, cell_id_j))
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            indices_j_all = cells[neighbor]
+
+            if cell == neighbor:
+                for a0 in range(0, int(indices_i_all.size), int(i_chunk)):
+                    a1 = min(int(indices_i_all.size), a0 + int(i_chunk))
+                    block_i = indices_i_all[a0:a1]
+                    ri = wrapped_positions[block_i]
+
+                    dr = ri[:, None, :] - ri[None, :, :]
+                    dr -= box * np.rint(dr / box)
+                    dr_flat = dr.reshape(-1, 3)
+                    dist_sq = np.sum(dr_flat * dr_flat, axis=1)
+
+                    ni = int(block_i.size)
+                    a_idx, b_idx = np.triu_indices(ni, k=1)
+                    keep = a_idx * ni + b_idx
+                    keep = keep[dist_sq[keep] <= cutoff_sq]
+                    if keep.size > 0:
+                        yield np.ascontiguousarray(dr_flat[keep], dtype=np.float64)
+
+                    for b0 in range(a1, int(indices_i_all.size), int(j_chunk)):
+                        b1 = min(int(indices_i_all.size), b0 + int(j_chunk))
+                        block_j = indices_i_all[b0:b1]
+                        rj = wrapped_positions[block_j]
+                        dr = ri[:, None, :] - rj[None, :, :]
+                        dr -= box * np.rint(dr / box)
+                        dr_flat = dr.reshape(-1, 3)
+                        dist_sq = np.sum(dr_flat * dr_flat, axis=1)
+                        keep = dist_sq <= cutoff_sq
+                        if np.any(keep):
+                            yield np.ascontiguousarray(dr_flat[keep], dtype=np.float64)
+                continue
+
+            for a0 in range(0, int(indices_i_all.size), int(i_chunk)):
+                a1 = min(int(indices_i_all.size), a0 + int(i_chunk))
+                block_i = indices_i_all[a0:a1]
+                ri = wrapped_positions[block_i]
+                for b0 in range(0, int(indices_j_all.size), int(j_chunk)):
+                    b1 = min(int(indices_j_all.size), b0 + int(j_chunk))
+                    block_j = indices_j_all[b0:b1]
+                    rj = wrapped_positions[block_j]
+                    dr = ri[:, None, :] - rj[None, :, :]
+                    dr -= box * np.rint(dr / box)
+                    dr_flat = dr.reshape(-1, 3)
+                    dist_sq = np.sum(dr_flat * dr_flat, axis=1)
+                    keep = dist_sq <= cutoff_sq
+                    if np.any(keep):
+                        yield np.ascontiguousarray(dr_flat[keep], dtype=np.float64)
 
 
 def _resolve_chunk_length(value: int | None, total: int) -> int:
@@ -1016,19 +1234,98 @@ def charge_dipole_k_magnitudes_by_resolution_three_tier(
     if unique_k.size == 0:
         return unique_k
 
-    def _filter_by_resolution(values: np.ndarray, resolution: float) -> np.ndarray:
-        if values.size == 0:
-            return values
-        selected = [float(values[0])]
-        for value in values[1:]:
-            if float(value) - selected[-1] >= float(resolution):
-                selected.append(float(value))
-        return np.asarray(selected, dtype=dtype)
-
-    tier_1 = _filter_by_resolution(unique_k[(unique_k > 0.0) & (unique_k <= float(kmax1))], float(res1))
-    tier_2 = _filter_by_resolution(unique_k[(unique_k > float(kmax1)) & (unique_k <= float(kmax2))], float(res2))
-    tier_3 = _filter_by_resolution(unique_k[(unique_k > float(kmax2)) & (unique_k <= float(kmax3))], float(res3))
+    tier_1 = _filter_by_resolution(unique_k[(unique_k > 0.0) & (unique_k <= float(kmax1))], float(res1), dtype=dtype)
+    tier_2 = _filter_by_resolution(unique_k[(unique_k > float(kmax1)) & (unique_k <= float(kmax2))], float(res2), dtype=dtype)
+    tier_3 = _filter_by_resolution(unique_k[(unique_k > float(kmax2)) & (unique_k <= float(kmax3))], float(res3), dtype=dtype)
     return np.concatenate([values for values in (tier_1, tier_2, tier_3) if values.size > 0]).astype(dtype, copy=False)
+
+
+def _filter_by_resolution(values: np.ndarray, resolution: float, *, dtype: Any = np.float64) -> np.ndarray:
+    values_array = np.asarray(values, dtype=dtype)
+    if values_array.size == 0:
+        return values_array
+    selected = [float(values_array[0])]
+    for value in values_array[1:]:
+        if float(value) - selected[-1] >= float(resolution):
+            selected.append(float(value))
+    return np.asarray(selected, dtype=dtype)
+
+
+def density_k_magnitudes_by_resolution_three_tier(
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    kmax1: float,
+    kmax2: float,
+    kmax3: float,
+    res1: float,
+    res2: float,
+    res3: float,
+    dtype: Any = np.float64,
+) -> np.ndarray:
+    unique_k = np.unique(
+        isotropic_k_magnitudes_three_tier(
+            Lx,
+            Ly,
+            Lz,
+            kmax1,
+            kmax2,
+            kmax3,
+            c1=1,
+            c2=1,
+            c3=1,
+            dtype=dtype,
+        )
+    )
+    if unique_k.size == 0:
+        return unique_k.astype(dtype, copy=False)
+
+    tier_1 = _filter_by_resolution(unique_k[(unique_k > 0.0) & (unique_k <= float(kmax1))], float(res1), dtype=dtype)
+    tier_2 = _filter_by_resolution(unique_k[(unique_k > float(kmax1)) & (unique_k <= float(kmax2))], float(res2), dtype=dtype)
+    tier_3 = _filter_by_resolution(unique_k[(unique_k > float(kmax2)) & (unique_k <= float(kmax3))], float(res3), dtype=dtype)
+    return np.concatenate([values for values in (tier_1, tier_2, tier_3) if values.size > 0]).astype(dtype, copy=False)
+
+
+def directional_k_vectors_by_resolution_three_tier(
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    kmax1: float,
+    kmax2: float,
+    kmax3: float,
+    res1: float,
+    res2: float,
+    res3: float,
+    active_axes: tuple[str, ...] | None = None,
+    dtype: Any = np.float64,
+) -> np.ndarray:
+    all_vectors = directional_k_vectors_three_tier(
+        Lx,
+        Ly,
+        Lz,
+        kmax1,
+        kmax2,
+        kmax3,
+        c1=1,
+        c2=1,
+        c3=1,
+        active_axes=active_axes,
+        dtype=dtype,
+    )
+    if all_vectors.size == 0:
+        return all_vectors
+
+    magnitudes = np.linalg.norm(all_vectors, axis=1)
+    unique_k = np.unique(np.asarray(magnitudes, dtype=dtype))
+    tier_1 = _filter_by_resolution(unique_k[(unique_k > 0.0) & (unique_k <= float(kmax1))], float(res1), dtype=dtype)
+    tier_2 = _filter_by_resolution(unique_k[(unique_k > float(kmax1)) & (unique_k <= float(kmax2))], float(res2), dtype=dtype)
+    tier_3 = _filter_by_resolution(unique_k[(unique_k > float(kmax2)) & (unique_k <= float(kmax3))], float(res3), dtype=dtype)
+    selected_magnitudes = np.concatenate([values for values in (tier_1, tier_2, tier_3) if values.size > 0]).astype(dtype, copy=False)
+    if selected_magnitudes.size == 0:
+        return np.empty((0, 3), dtype=dtype)
+
+    keep = np.isin(np.round(magnitudes, 12), np.round(selected_magnitudes, 12))
+    return np.asarray(all_vectors[keep], dtype=dtype)
 
 
 def _shell_average_complex(k_magnitudes: np.ndarray, values: np.ndarray, dk: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1471,6 +1768,12 @@ def compute_charge_dipole_structure_factor_from_files(
     Ly: float,
     Lz: float,
     shell_width: float,
+    cutoff_primary: float | None = None,
+    cutoff_secondary: float | None = None,
+    cutoff_tertiary: float | None = None,
+    cell_size_primary: float | None = None,
+    cell_size_secondary: float | None = None,
+    cell_size_tertiary: float | None = None,
     cutoff: float | None = None,
     cell_size: float | None = None,
     num_trajectories: int | None = None,
@@ -1508,7 +1811,21 @@ def compute_charge_dipole_structure_factor_from_files(
         raise ValueError("k stride values must be positive integers.")
     if int(charge_coords_stride) <= 0 or int(dipole_positions_stride) <= 0 or int(dipole_vectors_stride) <= 0:
         raise ValueError("Charge-dipole coordinate strides must be positive integers.")
-    cutoff, cell_size = _validate_cutoff_and_cell_size(cutoff, cell_size, label="Charge-dipole structure factor")
+    cutoff_primary, cutoff_secondary, cutoff_tertiary = _resolve_three_tier_cutoffs(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        legacy_cutoff=cutoff,
+    )
+    cell_size_primary, cell_size_secondary, cell_size_tertiary = _resolve_three_tier_cell_sizes(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        cell_size_primary,
+        cell_size_secondary,
+        cell_size_tertiary,
+        legacy_cell_size=cell_size,
+    )
     if float(shell_width) <= 0:
         raise ValueError("shell_width must be positive.")
     for label, value in [
@@ -1569,7 +1886,7 @@ def compute_charge_dipole_structure_factor_from_files(
         raise ValueError("No charge-dipole k vectors were generated. Increase k max values or verify the box lengths.")
     isotropic_output_path = _resolve_output_path(baseDir, isotropic_output_file)
     directional_output_path = _resolve_output_path(baseDir, directional_output_file)
-    status_logger = _StatusLogger(_status_log_path_for_output(isotropic_output_path), overall_start)
+    status_log_path = _status_log_path_for_output(isotropic_output_path)
 
     charge_values = _load_charge_values(charge_values_file, charge_values_io_spec, delete_residue_index)
     sqp_sum = np.zeros(k_vectors_array.shape[0], dtype=np.complex128)
@@ -1599,8 +1916,18 @@ def compute_charge_dipole_structure_factor_from_files(
     print(f"k stride tertiary: {int(k_stride_tertiary)}", flush=True)
     print(f"directional k vectors: {int(k_vectors_array.shape[0])}", flush=True)
     print(f"shell width: {float(shell_width):.8f}", flush=True)
-    print(f"cutoff: {float(cutoff):.8f}" if cutoff is not None else "cutoff: none", flush=True)
-    print(f"Cell Size: {float(cell_size):.8f}" if cell_size is not None else "Cell Size: none", flush=True)
+    for label, value in [
+        ("cutoff 1", cutoff_primary),
+        ("cutoff 2", cutoff_secondary),
+        ("cutoff 3", cutoff_tertiary),
+    ]:
+        print(f"{label}: {float(value):.8f}" if value is not None else f"{label}: none", flush=True)
+    for label, value in [
+        ("cell size 1", cell_size_primary),
+        ("cell size 2", cell_size_secondary),
+        ("cell size 3", cell_size_tertiary),
+    ]:
+        print(f"{label}: {float(value):.8f}" if value is not None else f"{label}: none", flush=True)
     print(
         "chunk sizes: "
         f"frame={frame_chunk if frame_chunk is not None else 'off'}, "
@@ -1694,22 +2021,41 @@ def compute_charge_dipole_structure_factor_from_files(
                 f"{int(charge_positions.shape[1])} sites."
             )
 
-        directional_values, frame_dipole_counts = charge_dipole_structure_factor_directional(
-            k_vectors_array,
-            charge_positions,
-            charge_values,
-            dipole_positions,
-            dipole_directions,
-            cutoff=cutoff,
-            cell_size=cell_size,
-            box=box,
-            frame_chunk=frame_chunk,
-            charge_chunk=charge_chunk,
-            dipole_chunk=dipole_chunk,
-            k_chunk=k_chunk,
-            normalize_by_frames=False,
-            status_logger=status_logger,
+        trajectory_status_logger = _StatusLogger(status_log_path, overall_start, trajectory_index=file_index)
+        directional_values = np.zeros(k_vectors_array.shape[0], dtype=np.complex128)
+        frame_dipole_counts = np.zeros(frame_count, dtype=np.int64)
+        tier_masks = _three_tier_masks_from_magnitudes(
+            k_magnitudes,
+            k_max_primary,
+            k_max_secondary,
+            k_max_tertiary,
         )
+        for mask, tier_cutoff, tier_cell_size in zip(
+            tier_masks,
+            (cutoff_primary, cutoff_secondary, cutoff_tertiary),
+            (cell_size_primary, cell_size_secondary, cell_size_tertiary),
+            strict=False,
+        ):
+            if not np.any(mask):
+                continue
+            tier_values, tier_counts = charge_dipole_structure_factor_directional(
+                k_vectors_array[mask],
+                charge_positions,
+                charge_values,
+                dipole_positions,
+                dipole_directions,
+                cutoff=tier_cutoff,
+                cell_size=tier_cell_size,
+                box=box,
+                frame_chunk=frame_chunk,
+                charge_chunk=charge_chunk,
+                dipole_chunk=dipole_chunk,
+                k_chunk=k_chunk,
+                normalize_by_frames=False,
+                status_logger=trajectory_status_logger,
+            )
+            directional_values[mask] = tier_values
+            frame_dipole_counts = np.maximum(frame_dipole_counts, np.asarray(tier_counts, dtype=np.int64))
         sqp_sum += directional_values
         total_frames += int(frame_count)
         dipoles_in_cutoff_all.append(np.asarray(frame_dipole_counts, dtype=np.int64))
@@ -1861,6 +2207,12 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     Lx: float,
     Ly: float,
     Lz: float,
+    cutoff_primary: float | None = None,
+    cutoff_secondary: float | None = None,
+    cutoff_tertiary: float | None = None,
+    cell_size_primary: float | None = None,
+    cell_size_secondary: float | None = None,
+    cell_size_tertiary: float | None = None,
     cutoff: float | None = None,
     cell_size: float | None = None,
     num_trajectories: int | None = None,
@@ -1897,7 +2249,21 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         raise ValueError("k resolution values must be positive.")
     if int(charge_coords_stride) <= 0 or int(dipole_positions_stride) <= 0 or int(dipole_vectors_stride) <= 0:
         raise ValueError("Charge-dipole coordinate strides must be positive integers.")
-    cutoff, cell_size = _validate_cutoff_and_cell_size(cutoff, cell_size, label="Charge-dipole structure factor")
+    cutoff_primary, cutoff_secondary, cutoff_tertiary = _resolve_three_tier_cutoffs(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        legacy_cutoff=cutoff,
+    )
+    cell_size_primary, cell_size_secondary, cell_size_tertiary = _resolve_three_tier_cell_sizes(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        cell_size_primary,
+        cell_size_secondary,
+        cell_size_tertiary,
+        legacy_cell_size=cell_size,
+    )
     for label, value in [
         ("frame_chunk", frame_chunk),
         ("charge_chunk", charge_chunk),
@@ -1955,7 +2321,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     if k_magnitudes.shape[0] == 0:
         raise ValueError("No isotropic charge-dipole k magnitudes were generated. Increase k max values or verify the box lengths.")
     isotropic_output_path = _resolve_output_path(baseDir, isotropic_output_file)
-    status_logger = _StatusLogger(_status_log_path_for_output(isotropic_output_path), overall_start)
+    status_log_path = _status_log_path_for_output(isotropic_output_path)
 
     charge_values = _load_charge_values(charge_values_file, charge_values_io_spec, delete_residue_index)
     sqp_sum_total = np.zeros(k_magnitudes.shape[0], dtype=np.float64)
@@ -1983,8 +2349,18 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     print(f"k resolution secondary: {float(k_stride_secondary):.8f}", flush=True)
     print(f"k resolution tertiary: {float(k_stride_tertiary):.8f}", flush=True)
     print(f"isotropic k values: {int(k_magnitudes.shape[0])}", flush=True)
-    print(f"cutoff: {float(cutoff):.8f}" if cutoff is not None else "cutoff: none", flush=True)
-    print(f"Cell Size: {float(cell_size):.8f}" if cell_size is not None else "Cell Size: none", flush=True)
+    for label, value in [
+        ("cutoff 1", cutoff_primary),
+        ("cutoff 2", cutoff_secondary),
+        ("cutoff 3", cutoff_tertiary),
+    ]:
+        print(f"{label}: {float(value):.8f}" if value is not None else f"{label}: none", flush=True)
+    for label, value in [
+        ("cell size 1", cell_size_primary),
+        ("cell size 2", cell_size_secondary),
+        ("cell size 3", cell_size_tertiary),
+    ]:
+        print(f"{label}: {float(value):.8f}" if value is not None else f"{label}: none", flush=True)
     print(
         "chunk sizes: "
         f"frame={frame_chunk if frame_chunk is not None else 'off'}, "
@@ -2078,22 +2454,43 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
                 f"{int(charge_positions.shape[1])} sites."
             )
 
-        isotropic_values_total, isotropic_values_cutoff, frame_dipole_counts = charge_dipole_structure_factor_isotropic(
+        trajectory_status_logger = _StatusLogger(status_log_path, overall_start, trajectory_index=file_index)
+        isotropic_values_total = np.zeros(k_magnitudes.shape[0], dtype=np.float64)
+        isotropic_values_cutoff = np.zeros(k_magnitudes.shape[0], dtype=np.float64)
+        frame_dipole_counts = np.zeros(frame_count, dtype=np.int64)
+        tier_masks = _three_tier_masks_from_magnitudes(
             k_magnitudes,
-            charge_positions,
-            charge_values,
-            dipole_positions,
-            dipole_directions,
-            cutoff=cutoff,
-            cell_size=cell_size,
-            box=box,
-            frame_chunk=frame_chunk,
-            charge_chunk=charge_chunk,
-            dipole_chunk=dipole_chunk,
-            k_chunk=k_chunk,
-            normalize_by_frames=False,
-            status_logger=status_logger,
+            k_max_primary,
+            k_max_secondary,
+            k_max_tertiary,
         )
+        for mask, tier_cutoff, tier_cell_size in zip(
+            tier_masks,
+            (cutoff_primary, cutoff_secondary, cutoff_tertiary),
+            (cell_size_primary, cell_size_secondary, cell_size_tertiary),
+            strict=False,
+        ):
+            if not np.any(mask):
+                continue
+            tier_total, tier_cutoff_values, tier_counts = charge_dipole_structure_factor_isotropic(
+                k_magnitudes[mask],
+                charge_positions,
+                charge_values,
+                dipole_positions,
+                dipole_directions,
+                cutoff=tier_cutoff,
+                cell_size=tier_cell_size,
+                box=box,
+                frame_chunk=frame_chunk,
+                charge_chunk=charge_chunk,
+                dipole_chunk=dipole_chunk,
+                k_chunk=k_chunk,
+                normalize_by_frames=False,
+                status_logger=trajectory_status_logger,
+            )
+            isotropic_values_total[mask] = tier_total
+            isotropic_values_cutoff[mask] = tier_cutoff_values
+            frame_dipole_counts = np.maximum(frame_dipole_counts, np.asarray(tier_counts, dtype=np.int64))
         sqp_sum_total += isotropic_values_total
         sqp_sum_cutoff += isotropic_values_cutoff
         total_frames += int(frame_count)
@@ -2193,6 +2590,7 @@ def _compute_dataset_average(
     k_vals: np.ndarray,
     box: np.ndarray,
     cutoff: float | None,
+    cell_size: float | None,
     num_trajectories: int | None,
     input_io_spec: dict[str, Any] | None,
     dataset_label: str,
@@ -2220,6 +2618,7 @@ def _compute_dataset_average(
             k_vals,
             box,
             cutoff,
+            cell_size,
             input_io_spec,
             coords_stride,
             frame_chunk,
@@ -2279,6 +2678,7 @@ def _compute_dataset_average_directional(
     k_vectors_array: np.ndarray,
     box: np.ndarray,
     cutoff: float | None,
+    cell_size: float | None,
     num_trajectories: int | None,
     input_io_spec: dict[str, Any] | None,
     dataset_label: str,
@@ -2306,6 +2706,7 @@ def _compute_dataset_average_directional(
             k_vectors_array,
             box,
             cutoff,
+            cell_size,
             input_io_spec,
             coords_stride,
             frame_chunk,
@@ -2358,6 +2759,62 @@ def _compute_dataset_average_directional(
     }
 
 
+def _merge_tier_trajectory_stats(
+    tier_stats: list[tuple[np.ndarray, dict[str, Any]]],
+    total_value_count: int,
+) -> dict[str, Any]:
+    merged: dict[int, dict[str, Any]] = {}
+    for mask, stats in tier_stats:
+        index_positions = np.flatnonzero(mask)
+        for item in stats.get("trajectory_results", []):
+            trajectory_index = int(item["trajectory_index"])
+            entry = merged.get(trajectory_index)
+            if entry is None:
+                entry = {
+                    "trajectory_index": trajectory_index,
+                    "file_path": item.get("file_path", ""),
+                    "frame_count": int(item.get("frame_count", 0) or 0),
+                    "coord_count": int(item.get("coord_count", 0) or 0),
+                    "elapsed_s": 0.0,
+                    "error": str(item.get("error", "") or ""),
+                    "sk_values": np.zeros(total_value_count, dtype=np.float64),
+                }
+                merged[trajectory_index] = entry
+            entry["elapsed_s"] += float(item.get("elapsed_s", 0.0) or 0.0)
+            if item.get("file_path"):
+                entry["file_path"] = item["file_path"]
+            if item.get("frame_count"):
+                entry["frame_count"] = int(item["frame_count"])
+            if item.get("coord_count"):
+                entry["coord_count"] = int(item["coord_count"])
+            error_text = str(item.get("error", "") or "")
+            if error_text:
+                entry["error"] = error_text
+                continue
+            entry["sk_values"][index_positions] = np.asarray(item["sk_values"], dtype=np.float64)
+
+    trajectory_results = [merged[index] for index in sorted(merged)]
+    success_indices = [int(item["trajectory_index"]) for item in trajectory_results if not item.get("error")]
+    failed = [
+        {
+            "trajectory_index": int(item["trajectory_index"]),
+            "file_path": item.get("file_path", ""),
+            "error": item.get("error", ""),
+        }
+        for item in trajectory_results
+        if item.get("error")
+    ]
+    total_frames = sum(int(item.get("frame_count", 0) or 0) for item in trajectory_results if not item.get("error"))
+    return {
+        "success_indices": success_indices,
+        "failed": failed,
+        "total_frames": total_frames,
+        "success_count": len(success_indices),
+        "failure_count": len(failed),
+        "trajectory_results": trajectory_results,
+    }
+
+
 def _compute_single_trajectory_sk(args: tuple[Any, ...]) -> dict[str, Any]:
     (
         trajectory_index,
@@ -2365,6 +2822,7 @@ def _compute_single_trajectory_sk(args: tuple[Any, ...]) -> dict[str, Any]:
         k_vals,
         box,
         cutoff,
+        cell_size,
         input_io_spec,
         coords_stride,
         frame_chunk,
@@ -2400,13 +2858,18 @@ def _compute_single_trajectory_sk(args: tuple[Any, ...]) -> dict[str, Any]:
         print(f"  k max: {float(np.max(k_array)) if k_array.size else 0.0:.8f}", flush=True)
         print(f"  shape of k vectors: {tuple(int(value) for value in k_array.shape)}", flush=True)
         print(f"  anticipated S(k) output shape: {anticipated_output_shape}", flush=True)
-        status_logger = None if status_path is None or status_start_epoch is None else _StatusLogger(status_path, status_start_epoch)
+        status_logger = None if status_path is None or status_start_epoch is None else _StatusLogger(
+            status_path,
+            status_start_epoch,
+            trajectory_index=int(trajectory_index),
+        )
 
         sk_values = isotropic_structure_factor_db_density(
             coords,
             k_vals,
             box=box,
             cutoff=cutoff,
+            cell_size=cell_size,
             frame_chunk=int(frame_chunk),
             i_chunk=int(coord_chunk),
             j_chunk=int(coord_chunk),
@@ -2436,6 +2899,7 @@ def _compute_single_trajectory_directional_sk(args: tuple[Any, ...]) -> dict[str
         k_vectors_array,
         box,
         cutoff,
+        cell_size,
         input_io_spec,
         coords_stride,
         frame_chunk,
@@ -2470,13 +2934,18 @@ def _compute_single_trajectory_directional_sk(args: tuple[Any, ...]) -> dict[str
         print(f"  shape of r: {tuple(int(value) for value in coords.shape)}", flush=True)
         print(f"  directional k-vector count: {int(k_vectors_use.shape[0])}", flush=True)
         print(f"  anticipated directional S(k) output shape: {anticipated_output_shape}", flush=True)
-        status_logger = None if status_path is None or status_start_epoch is None else _StatusLogger(status_path, status_start_epoch)
+        status_logger = None if status_path is None or status_start_epoch is None else _StatusLogger(
+            status_path,
+            status_start_epoch,
+            trajectory_index=int(trajectory_index),
+        )
 
         sk_values = directional_structure_factor(
             coords,
             k_vectors_use,
             box=box,
             cutoff=cutoff,
+            cell_size=cell_size,
             frame_chunk=int(frame_chunk),
             atom_chunk=int(coord_chunk),
             k_chunk=int(k_chunk),
@@ -2507,13 +2976,19 @@ def compute_static_structure_factor_from_files(
     k_max_primary: float,
     k_max_secondary: float,
     k_max_tertiary: float,
-    k_stride_primary: int,
-    k_stride_secondary: int,
-    k_stride_tertiary: int,
+    k_stride_primary: float,
+    k_stride_secondary: float,
+    k_stride_tertiary: float,
     Lx: float,
     Ly: float,
     Lz: float,
     shell_width: float,
+    cutoff_primary: float | None = None,
+    cutoff_secondary: float | None = None,
+    cutoff_tertiary: float | None = None,
+    cell_size_primary: float | None = None,
+    cell_size_secondary: float | None = None,
+    cell_size_tertiary: float | None = None,
     cutoff: float | None = None,
     num_trajectories: int | None = None,
     max_workers: int = 1,
@@ -2532,20 +3007,32 @@ def compute_static_structure_factor_from_files(
         k_stride_primary,
         k_stride_secondary,
         k_stride_tertiary,
-        stride_kind="int",
+        stride_kind="float",
     )
     if k_max_primary < 0 or k_max_secondary <= 0 or k_max_tertiary <= 0:
         raise ValueError("k max values must satisfy k_max_primary >= 0, k_max_secondary > 0, and k_max_tertiary > 0.")
     if k_max_primary > k_max_secondary or k_max_secondary > k_max_tertiary:
         raise ValueError("k max values must satisfy k_max_primary <= k_max_secondary <= k_max_tertiary.")
     if k_stride_primary <= 0 or k_stride_secondary <= 0 or k_stride_tertiary <= 0:
-        raise ValueError("k stride values must be positive integers.")
+        raise ValueError("k resolution values must be positive.")
     if int(coords_stride) <= 0:
         raise ValueError("Coordinate stride must be a positive integer.")
     if shell_width <= 0:
         raise ValueError("shell_width must be positive.")
-    if cutoff is not None and float(cutoff) <= 0:
-        raise ValueError("cutoff must be positive when provided.")
+    cutoff_primary, cutoff_secondary, cutoff_tertiary = _resolve_three_tier_cutoffs(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        legacy_cutoff=cutoff,
+    )
+    cell_size_primary, cell_size_secondary, cell_size_tertiary = _resolve_three_tier_cell_sizes(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        cell_size_primary,
+        cell_size_secondary,
+        cell_size_tertiary,
+    )
     if max_workers <= 0:
         raise ValueError("max_workers must be positive.")
     if frame_chunk <= 0 or coord_chunk <= 0 or k_chunk <= 0:
@@ -2562,16 +3049,16 @@ def compute_static_structure_factor_from_files(
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
 
-    raw_k = isotropic_k_magnitudes_three_tier(
+    raw_k = density_k_magnitudes_by_resolution_three_tier(
         float(Lx),
         float(Ly),
         float(Lz),
         float(k_max_primary),
         float(k_max_secondary),
         float(k_max_tertiary),
-        c1=int(k_stride_primary),
-        c2=int(k_stride_secondary),
-        c3=int(k_stride_tertiary),
+        float(k_stride_primary),
+        float(k_stride_secondary),
+        float(k_stride_tertiary),
     )
     if raw_k.size == 0:
         raise ValueError("No reciprocal-vector magnitudes were generated. Increase the k Max values or verify the box lengths.")
@@ -2579,7 +3066,7 @@ def compute_static_structure_factor_from_files(
     if k_vals.size == 0:
         raise ValueError("No unique k values remain after applying the shell width.")
     resolved_output_file = _resolve_output_path(baseDir, output_file)
-    status_logger = _StatusLogger(_status_log_path_for_output(resolved_output_file), overall_start)
+    status_log_path = _status_log_path_for_output(resolved_output_file)
 
     print("=" * 60, flush=True)
     print("ISOTROPIC STATIC STRUCTURE FACTOR CALCULATION", flush=True)
@@ -2590,11 +3077,22 @@ def compute_static_structure_factor_from_files(
     print(f"k max primary: {float(k_max_primary):.8f}", flush=True)
     print(f"k max secondary: {float(k_max_secondary):.8f}", flush=True)
     print(f"k max tertiary: {float(k_max_tertiary):.8f}", flush=True)
-    print(f"k stride primary: {int(k_stride_primary)}", flush=True)
-    print(f"k stride secondary: {int(k_stride_secondary)}", flush=True)
-    print(f"k stride tertiary: {int(k_stride_tertiary)}", flush=True)
+    print(f"k resolution primary: {float(k_stride_primary):.8f}", flush=True)
+    print(f"k resolution secondary: {float(k_stride_secondary):.8f}", flush=True)
+    print(f"k resolution tertiary: {float(k_stride_tertiary):.8f}", flush=True)
     print(f"shell width: {float(shell_width):.8f}", flush=True)
-    print(f"cutoff: {float(cutoff):.8f}" if cutoff is not None else "cutoff: none", flush=True)
+    for label, value in [
+        ("cutoff 1", cutoff_primary),
+        ("cutoff 2", cutoff_secondary),
+        ("cutoff 3", cutoff_tertiary),
+    ]:
+        print(f"{label}: {float(value):.8f}" if value is not None else f"{label}: none", flush=True)
+    for label, value in [
+        ("cell size 1", cell_size_primary),
+        ("cell size 2", cell_size_secondary),
+        ("cell size 3", cell_size_tertiary),
+    ]:
+        print(f"{label}: {float(value):.8f}" if value is not None else f"{label}: none", flush=True)
     print(f"shape of k vectors: {tuple(int(value) for value in np.asarray(k_vals).shape)}", flush=True)
     print(f"anticipated S(k) output shape: {(int(k_vals.size), 2)}", flush=True)
     if frame_window is None:
@@ -2612,38 +3110,79 @@ def compute_static_structure_factor_from_files(
     used_file_count = min(len(coordinate_files), int(num_trajectories)) if num_trajectories is not None else len(coordinate_files)
     print(f"coordinate files discovered: {len(coordinate_files)}", flush=True)
     print(f"coordinate files used: {used_file_count}", flush=True)
-    single_trajectory_reports: list[str] = []
-
-    def on_trajectory_complete(item: dict[str, Any]) -> None:
-        single_trajectory_reports.append(
-            _write_single_trajectory_output(
-                resolved_output_file,
-                int(item["trajectory_index"]),
-                np.column_stack((k_vals, item["sk_values"] / float(item["frame_count"]))),
-                output_io_spec,
-                default_mode="text",
-                default_precision="double",
-            )
-        )
-
-    sk_values, stats = _compute_dataset_average(
-        coordinate_files=coordinate_files,
-        coords_stride=coords_stride,
-        k_vals=k_vals,
-        box=box,
-        cutoff=cutoff,
-        num_trajectories=num_trajectories,
-        input_io_spec=input_io_spec,
-        dataset_label="the coordinate dataset",
-        max_workers=max_workers,
-        frame_chunk=frame_chunk,
-        coord_chunk=coord_chunk,
-        k_chunk=k_chunk,
-        frame_window=frame_window,
-        status_path=status_logger.path,
-        status_start_epoch=overall_start,
-        on_trajectory_complete=on_trajectory_complete,
+    tier_masks = _three_tier_masks_from_magnitudes(
+        k_vals,
+        k_max_primary,
+        k_max_secondary,
+        k_max_tertiary,
     )
+    sk_values = np.zeros(k_vals.size, dtype=np.float64)
+    tier_stats: list[tuple[np.ndarray, dict[str, Any]]] = []
+    active_tiers = [
+        (mask, tier_cutoff, tier_cell_size)
+        for mask, tier_cutoff, tier_cell_size in zip(
+            tier_masks,
+            (cutoff_primary, cutoff_secondary, cutoff_tertiary),
+            (cell_size_primary, cell_size_secondary, cell_size_tertiary),
+            strict=False,
+        )
+        if np.any(mask)
+    ]
+    single_trajectory_reports: list[str] = []
+    per_trajectory_outputs: dict[int, dict[str, Any]] = {}
+    last_active_tier_index = len(active_tiers) - 1
+    for tier_index, (mask, tier_cutoff, tier_cell_size) in enumerate(active_tiers):
+        index_positions = np.flatnonzero(mask)
+        def on_trajectory_complete(item: dict[str, Any], *, _index_positions=index_positions, _is_last=tier_index == last_active_tier_index) -> None:
+            trajectory_index = int(item["trajectory_index"])
+            entry = per_trajectory_outputs.get(trajectory_index)
+            if entry is None:
+                entry = {
+                    "file_path": item["file_path"],
+                    "frame_count": int(item["frame_count"]),
+                    "sk_values": np.zeros(k_vals.size, dtype=np.float64),
+                    "completed_tiers": 0,
+                }
+                per_trajectory_outputs[trajectory_index] = entry
+            entry["file_path"] = item["file_path"]
+            entry["frame_count"] = int(item["frame_count"])
+            entry["sk_values"][_index_positions] = np.asarray(item["sk_values"], dtype=np.float64) / float(item["frame_count"])
+            entry["completed_tiers"] = int(entry["completed_tiers"]) + 1
+            if _is_last and int(entry["completed_tiers"]) == len(active_tiers):
+                single_trajectory_reports.append(
+                    _write_single_trajectory_output(
+                        resolved_output_file,
+                        trajectory_index,
+                        np.column_stack((k_vals, entry["sk_values"])),
+                        output_io_spec,
+                        default_mode="text",
+                        default_precision="double",
+                    )
+                )
+        if not np.any(mask):
+            continue
+        tier_values, tier_stat = _compute_dataset_average(
+            coordinate_files=coordinate_files,
+            coords_stride=coords_stride,
+            k_vals=k_vals[mask],
+            box=box,
+            cutoff=tier_cutoff,
+            cell_size=tier_cell_size,
+            num_trajectories=num_trajectories,
+            input_io_spec=input_io_spec,
+            dataset_label="the coordinate dataset",
+            max_workers=max_workers,
+            frame_chunk=frame_chunk,
+            coord_chunk=coord_chunk,
+            k_chunk=k_chunk,
+            frame_window=frame_window,
+            status_path=status_log_path,
+            status_start_epoch=overall_start,
+            on_trajectory_complete=on_trajectory_complete,
+        )
+        sk_values[mask] = tier_values
+        tier_stats.append((mask, tier_stat))
+    stats = _merge_tier_trajectory_stats(tier_stats, int(k_vals.size))
     output_array = np.column_stack((k_vals, sk_values))
     single_trajectory_reports.sort(key=_natural_sort_key)
 
@@ -2656,8 +3195,6 @@ def compute_static_structure_factor_from_files(
     )
 
     overall_elapsed = time.time() - overall_start
-    coord_count = int(stats["trajectory_results"][0].get("coord_count", 0)) if stats["trajectory_results"] else 0
-    status_logger.density(stats["total_frames"], coord_count, int(k_vals.size), force=True)
     print(f"\nSaved isotropic S(k) output: {resolved_output_file}", flush=True)
     print(f"successful files: {stats['success_count']}", flush=True)
     print(f"failed files: {stats['failure_count']}", flush=True)
@@ -2682,13 +3219,19 @@ def compute_directional_structure_factor_from_files(
     k_max_primary: float,
     k_max_secondary: float,
     k_max_tertiary: float,
-    k_stride_primary: int,
-    k_stride_secondary: int,
-    k_stride_tertiary: int,
+    k_stride_primary: float,
+    k_stride_secondary: float,
+    k_stride_tertiary: float,
     Lx: float,
     Ly: float,
     Lz: float,
     shell_width: float,
+    cutoff_primary: float | None = None,
+    cutoff_secondary: float | None = None,
+    cutoff_tertiary: float | None = None,
+    cell_size_primary: float | None = None,
+    cell_size_secondary: float | None = None,
+    cell_size_tertiary: float | None = None,
     cutoff: float | None = None,
     num_trajectories: int | None = None,
     max_workers: int = 1,
@@ -2708,20 +3251,32 @@ def compute_directional_structure_factor_from_files(
         k_stride_primary,
         k_stride_secondary,
         k_stride_tertiary,
-        stride_kind="int",
+        stride_kind="float",
     )
     if k_max_primary < 0 or k_max_secondary <= 0 or k_max_tertiary <= 0:
         raise ValueError("k max values must satisfy k_max_primary >= 0, k_max_secondary > 0, and k_max_tertiary > 0.")
     if k_max_primary > k_max_secondary or k_max_secondary > k_max_tertiary:
         raise ValueError("k max values must satisfy k_max_primary <= k_max_secondary <= k_max_tertiary.")
     if k_stride_primary <= 0 or k_stride_secondary <= 0 or k_stride_tertiary <= 0:
-        raise ValueError("k stride values must be positive integers.")
+        raise ValueError("k resolution values must be positive.")
     if int(coords_stride) <= 0:
         raise ValueError("Coordinate stride must be a positive integer.")
     if shell_width <= 0:
         raise ValueError("shell_width must be positive.")
-    if cutoff is not None and float(cutoff) <= 0:
-        raise ValueError("cutoff must be positive when provided.")
+    cutoff_primary, cutoff_secondary, cutoff_tertiary = _resolve_three_tier_cutoffs(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        legacy_cutoff=cutoff,
+    )
+    cell_size_primary, cell_size_secondary, cell_size_tertiary = _resolve_three_tier_cell_sizes(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        cell_size_primary,
+        cell_size_secondary,
+        cell_size_tertiary,
+    )
     if max_workers <= 0:
         raise ValueError("max_workers must be positive.")
     if frame_chunk <= 0 or coord_chunk <= 0 or k_chunk <= 0:
@@ -2738,22 +3293,22 @@ def compute_directional_structure_factor_from_files(
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
 
-    k_vectors_array = directional_k_vectors_three_tier(
+    k_vectors_array = directional_k_vectors_by_resolution_three_tier(
         float(Lx),
         float(Ly),
         float(Lz),
         float(k_max_primary),
         float(k_max_secondary),
         float(k_max_tertiary),
-        c1=int(k_stride_primary),
-        c2=int(k_stride_secondary),
-        c3=int(k_stride_tertiary),
+        float(k_stride_primary),
+        float(k_stride_secondary),
+        float(k_stride_tertiary),
         active_axes=active_axes,
     )
     if k_vectors_array.shape[0] == 0:
         raise ValueError("No directional k vectors were generated. Increase the k Max values or verify the selected directions.")
     resolved_output_file = _resolve_output_path(baseDir, output_file)
-    status_logger = _StatusLogger(_status_log_path_for_output(resolved_output_file), overall_start)
+    status_log_path = _status_log_path_for_output(resolved_output_file)
 
     print("=" * 60, flush=True)
     print("DIRECTIONAL STATIC STRUCTURE FACTOR CALCULATION", flush=True)
@@ -2764,17 +3319,27 @@ def compute_directional_structure_factor_from_files(
     print(f"k max primary: {float(k_max_primary):.8f}", flush=True)
     print(f"k max secondary: {float(k_max_secondary):.8f}", flush=True)
     print(f"k max tertiary: {float(k_max_tertiary):.8f}", flush=True)
-    print(f"k stride primary: {int(k_stride_primary)}", flush=True)
-    print(f"k stride secondary: {int(k_stride_secondary)}", flush=True)
-    print(f"k stride tertiary: {int(k_stride_tertiary)}", flush=True)
+    print(f"k resolution primary: {float(k_stride_primary):.8f}", flush=True)
+    print(f"k resolution secondary: {float(k_stride_secondary):.8f}", flush=True)
+    print(f"k resolution tertiary: {float(k_stride_tertiary):.8f}", flush=True)
     print(f"shell width: {float(shell_width):.8f}", flush=True)
-    print(f"cutoff: {float(cutoff):.8f}" if cutoff is not None else "cutoff: none", flush=True)
+    for label, value in [
+        ("cutoff 1", cutoff_primary),
+        ("cutoff 2", cutoff_secondary),
+        ("cutoff 3", cutoff_tertiary),
+    ]:
+        print(f"{label}: {float(value):.8f}" if value is not None else f"{label}: none", flush=True)
+    for label, value in [
+        ("cell size 1", cell_size_primary),
+        ("cell size 2", cell_size_secondary),
+        ("cell size 3", cell_size_tertiary),
+    ]:
+        print(f"{label}: {float(value):.8f}" if value is not None else f"{label}: none", flush=True)
     print(f"directional k vectors: {int(k_vectors_array.shape[0])}", flush=True)
     print(f"anticipated directional S(k) output shape: {(int(k_vectors_array.shape[0]), 5)}", flush=True)
     used_file_count = min(len(coordinate_files), int(num_trajectories)) if num_trajectories is not None else len(coordinate_files)
     print(f"coordinate files discovered: {len(coordinate_files)}", flush=True)
     print(f"coordinate files used: {used_file_count}", flush=True)
-    single_trajectory_reports: list[str] = []
     if frame_window is None:
         print("trajectory desired length: full trajectory", flush=True)
     else:
@@ -2783,43 +3348,78 @@ def compute_directional_structure_factor_from_files(
             flush=True,
         )
 
-    def on_trajectory_complete(item: dict[str, Any]) -> None:
-        single_trajectory_reports.append(
-            _write_single_trajectory_output(
-                resolved_output_file,
-                int(item["trajectory_index"]),
-                np.column_stack(
-                    (
-                        k_vectors_array,
-                        np.linalg.norm(k_vectors_array, axis=1),
-                        item["sk_values"] / float(item["frame_count"]),
-                    )
-                ),
-                output_io_spec,
-                default_mode="text",
-                default_precision="double",
-            )
-        )
-
-    sk_values, stats = _compute_dataset_average_directional(
-        coordinate_files=coordinate_files,
-        coords_stride=coords_stride,
-        k_vectors_array=k_vectors_array,
-        box=box,
-        cutoff=cutoff,
-        num_trajectories=num_trajectories,
-        input_io_spec=input_io_spec,
-        dataset_label="the directional coordinate dataset",
-        max_workers=max_workers,
-        frame_chunk=frame_chunk,
-        coord_chunk=coord_chunk,
-        k_chunk=k_chunk,
-        frame_window=frame_window,
-        status_path=status_logger.path,
-        status_start_epoch=overall_start,
-        on_trajectory_complete=on_trajectory_complete,
-    )
     k_magnitudes = np.linalg.norm(k_vectors_array, axis=1)
+    tier_masks = _three_tier_masks_from_magnitudes(
+        k_magnitudes,
+        k_max_primary,
+        k_max_secondary,
+        k_max_tertiary,
+    )
+    sk_values = np.zeros(int(k_vectors_array.shape[0]), dtype=np.float64)
+    tier_stats: list[tuple[np.ndarray, dict[str, Any]]] = []
+    active_tiers = [
+        (mask, tier_cutoff, tier_cell_size)
+        for mask, tier_cutoff, tier_cell_size in zip(
+            tier_masks,
+            (cutoff_primary, cutoff_secondary, cutoff_tertiary),
+            (cell_size_primary, cell_size_secondary, cell_size_tertiary),
+            strict=False,
+        )
+        if np.any(mask)
+    ]
+    single_trajectory_reports: list[str] = []
+    per_trajectory_outputs: dict[int, dict[str, Any]] = {}
+    last_active_tier_index = len(active_tiers) - 1
+    for tier_index, (mask, tier_cutoff, tier_cell_size) in enumerate(active_tiers):
+        index_positions = np.flatnonzero(mask)
+        def on_trajectory_complete(item: dict[str, Any], *, _index_positions=index_positions, _is_last=tier_index == last_active_tier_index) -> None:
+            trajectory_index = int(item["trajectory_index"])
+            entry = per_trajectory_outputs.get(trajectory_index)
+            if entry is None:
+                entry = {
+                    "frame_count": int(item["frame_count"]),
+                    "sk_values": np.zeros(int(k_vectors_array.shape[0]), dtype=np.float64),
+                    "completed_tiers": 0,
+                }
+                per_trajectory_outputs[trajectory_index] = entry
+            entry["frame_count"] = int(item["frame_count"])
+            entry["sk_values"][_index_positions] = np.asarray(item["sk_values"], dtype=np.float64) / float(item["frame_count"])
+            entry["completed_tiers"] = int(entry["completed_tiers"]) + 1
+            if _is_last and int(entry["completed_tiers"]) == len(active_tiers):
+                single_trajectory_reports.append(
+                    _write_single_trajectory_output(
+                        resolved_output_file,
+                        trajectory_index,
+                        np.column_stack((k_vectors_array, k_magnitudes, entry["sk_values"])),
+                        output_io_spec,
+                        default_mode="text",
+                        default_precision="double",
+                    )
+                )
+        if not np.any(mask):
+            continue
+        tier_values, tier_stat = _compute_dataset_average_directional(
+            coordinate_files=coordinate_files,
+            coords_stride=coords_stride,
+            k_vectors_array=k_vectors_array[mask],
+            box=box,
+            cutoff=tier_cutoff,
+            cell_size=tier_cell_size,
+            num_trajectories=num_trajectories,
+            input_io_spec=input_io_spec,
+            dataset_label="the directional coordinate dataset",
+            max_workers=max_workers,
+            frame_chunk=frame_chunk,
+            coord_chunk=coord_chunk,
+            k_chunk=k_chunk,
+            frame_window=frame_window,
+            status_path=status_log_path,
+            status_start_epoch=overall_start,
+            on_trajectory_complete=on_trajectory_complete,
+        )
+        sk_values[mask] = tier_values
+        tier_stats.append((mask, tier_stat))
+    stats = _merge_tier_trajectory_stats(tier_stats, int(k_vectors_array.shape[0]))
     output_array = np.column_stack((k_vectors_array, k_magnitudes, sk_values))
     single_trajectory_reports.sort(key=_natural_sort_key)
     save_numeric_array(
@@ -2831,8 +3431,6 @@ def compute_directional_structure_factor_from_files(
     )
 
     overall_elapsed = time.time() - overall_start
-    coord_count = int(stats["trajectory_results"][0].get("coord_count", 0)) if stats["trajectory_results"] else 0
-    status_logger.density(stats["total_frames"], coord_count, int(k_vectors_array.shape[0]), force=True)
     print(f"\nSaved directional S(k) output: {resolved_output_file}", flush=True)
     print(f"successful files: {stats['success_count']}", flush=True)
     print(f"failed files: {stats['failure_count']}", flush=True)
@@ -2865,13 +3463,19 @@ def compute_k_component_structure_factors_from_files(
     k_max_primary: float,
     k_max_secondary: float,
     k_max_tertiary: float,
-    k_stride_primary: int,
-    k_stride_secondary: int,
-    k_stride_tertiary: int,
+    k_stride_primary: float,
+    k_stride_secondary: float,
+    k_stride_tertiary: float,
     Lx: float,
     Ly: float,
     Lz: float,
     shell_width: float,
+    cutoff_primary: float | None = None,
+    cutoff_secondary: float | None = None,
+    cutoff_tertiary: float | None = None,
+    cell_size_primary: float | None = None,
+    cell_size_secondary: float | None = None,
+    cell_size_tertiary: float | None = None,
     cutoff: float | None = None,
     num_trajectories: int | None = None,
     max_workers: int = 1,
@@ -2890,7 +3494,7 @@ def compute_k_component_structure_factors_from_files(
         k_stride_primary,
         k_stride_secondary,
         k_stride_tertiary,
-        stride_kind="int",
+        stride_kind="float",
     )
     components = parse_k_component_selection(components_selection)
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
@@ -2904,33 +3508,44 @@ def compute_k_component_structure_factors_from_files(
     if k_max_primary > k_max_secondary or k_max_secondary > k_max_tertiary:
         raise ValueError("k max values must satisfy k_max_primary <= k_max_secondary <= k_max_tertiary.")
     if k_stride_primary <= 0 or k_stride_secondary <= 0 or k_stride_tertiary <= 0:
-        raise ValueError("k stride values must be positive integers.")
+        raise ValueError("k resolution values must be positive.")
     if int(coords_stride) <= 0:
         raise ValueError("Coordinate stride must be a positive integer.")
     if shell_width <= 0:
         raise ValueError("shell_width must be positive.")
-    if cutoff is not None and float(cutoff) <= 0:
-        raise ValueError("cutoff must be positive when provided.")
+    cutoff_primary, cutoff_secondary, cutoff_tertiary = _resolve_three_tier_cutoffs(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        legacy_cutoff=cutoff,
+    )
+    cell_size_primary, cell_size_secondary, cell_size_tertiary = _resolve_three_tier_cell_sizes(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        cell_size_primary,
+        cell_size_secondary,
+        cell_size_tertiary,
+    )
     base_output_path = _resolve_output_path(baseDir, output_file)
-    status_logger = _StatusLogger(_status_log_path_for_output(base_output_path), overall_start)
+    status_log_path = _status_log_path_for_output(base_output_path)
 
     results: list[dict[str, Any]] = []
-    total_frames_logged = 0
     for axes in components:
         label = component_label(axes)
         component_output_file = _component_output_path(output_file, label, len(components))
         resolved_output_file = _resolve_output_path(baseDir, component_output_file)
         single_trajectory_reports: list[str] = []
-        k_vectors_array = directional_k_vectors_three_tier(
+        k_vectors_array = directional_k_vectors_by_resolution_three_tier(
             float(Lx),
             float(Ly),
             float(Lz),
             float(k_max_primary),
             float(k_max_secondary),
             float(k_max_tertiary),
-            c1=int(k_stride_primary),
-            c2=int(k_stride_secondary),
-            c3=int(k_stride_tertiary),
+            float(k_stride_primary),
+            float(k_stride_secondary),
+            float(k_stride_tertiary),
             active_axes=axes,
         )
         if k_vectors_array.shape[0] == 0:
@@ -2940,55 +3555,94 @@ def compute_k_component_structure_factors_from_files(
         print(f"K-COMPONENT STRUCTURE FACTOR CALCULATION: {label}", flush=True)
         print("=" * 60, flush=True)
 
-        def on_trajectory_complete(item: dict[str, Any]) -> None:
-            normalized_values = item["sk_values"] / float(item["frame_count"])
-            if len(axes) == 1:
-                axis_k_local = np.abs(k_vectors_array[:, {"x": 0, "y": 1, "z": 2}[axes[0]]])
-                report_values = normalized_values
-            else:
-                k_magnitudes_local = np.linalg.norm(k_vectors_array, axis=1)
-                axis_k_local, report_values = _aggregate_by_tolerance(
-                    k_magnitudes_local,
-                    normalized_values,
-                    float(shell_width),
-                )
-            single_trajectory_reports.append(
-                _write_single_trajectory_output(
-                    resolved_output_file,
-                    int(item["trajectory_index"]),
-                    np.column_stack((axis_k_local, report_values)),
-                    output_io_spec,
-                    default_mode="text",
-                    default_precision="double",
-                )
-            )
-
-        sk_values, stats = _compute_dataset_average_directional(
-            coordinate_files=coordinate_files,
-            coords_stride=coords_stride,
-            k_vectors_array=k_vectors_array,
-            box=box,
-            cutoff=cutoff,
-            num_trajectories=num_trajectories,
-            input_io_spec=input_io_spec,
-            dataset_label=f"the {label} coordinate dataset",
-            max_workers=max_workers,
-            frame_chunk=frame_chunk,
-            coord_chunk=coord_chunk,
-            k_chunk=k_chunk,
-            frame_window=frame_window,
-            status_path=status_logger.path,
-            status_start_epoch=overall_start,
-            on_trajectory_complete=on_trajectory_complete,
+        k_magnitudes = np.linalg.norm(k_vectors_array, axis=1)
+        tier_masks = _three_tier_masks_from_magnitudes(
+            k_magnitudes,
+            k_max_primary,
+            k_max_secondary,
+            k_max_tertiary,
         )
-        total_frames_logged += int(stats["total_frames"])
+        sk_values = np.zeros(int(k_vectors_array.shape[0]), dtype=np.float64)
+        tier_stats: list[tuple[np.ndarray, dict[str, Any]]] = []
+        active_tiers = [
+            (mask, tier_cutoff, tier_cell_size)
+            for mask, tier_cutoff, tier_cell_size in zip(
+                tier_masks,
+                (cutoff_primary, cutoff_secondary, cutoff_tertiary),
+                (cell_size_primary, cell_size_secondary, cell_size_tertiary),
+                strict=False,
+            )
+            if np.any(mask)
+        ]
+        per_trajectory_outputs: dict[int, dict[str, Any]] = {}
+        last_active_tier_index = len(active_tiers) - 1
+        for tier_index, (mask, tier_cutoff, tier_cell_size) in enumerate(active_tiers):
+            index_positions = np.flatnonzero(mask)
+            def on_trajectory_complete(item: dict[str, Any], *, _index_positions=index_positions, _is_last=tier_index == last_active_tier_index) -> None:
+                trajectory_index = int(item["trajectory_index"])
+                entry = per_trajectory_outputs.get(trajectory_index)
+                if entry is None:
+                    entry = {
+                        "frame_count": int(item["frame_count"]),
+                        "sk_values": np.zeros(int(k_vectors_array.shape[0]), dtype=np.float64),
+                        "completed_tiers": 0,
+                    }
+                    per_trajectory_outputs[trajectory_index] = entry
+                entry["frame_count"] = int(item["frame_count"])
+                entry["sk_values"][_index_positions] = np.asarray(item["sk_values"], dtype=np.float64) / float(item["frame_count"])
+                entry["completed_tiers"] = int(entry["completed_tiers"]) + 1
+                if not _is_last or int(entry["completed_tiers"]) != len(active_tiers):
+                    return
+                normalized_values = entry["sk_values"]
+                if len(axes) == 1:
+                    axis_k_local = np.abs(k_vectors_array[:, {"x": 0, "y": 1, "z": 2}[axes[0]]])
+                    report_values = normalized_values
+                else:
+                    axis_k_local, report_values = _aggregate_by_tolerance(
+                        k_magnitudes,
+                        normalized_values,
+                        float(shell_width),
+                    )
+                single_trajectory_reports.append(
+                    _write_single_trajectory_output(
+                        resolved_output_file,
+                        trajectory_index,
+                        np.column_stack((axis_k_local, report_values)),
+                        output_io_spec,
+                        default_mode="text",
+                        default_precision="double",
+                    )
+                )
+            if not np.any(mask):
+                continue
+            tier_values, tier_stat = _compute_dataset_average_directional(
+                coordinate_files=coordinate_files,
+                coords_stride=coords_stride,
+                k_vectors_array=k_vectors_array[mask],
+                box=box,
+                cutoff=tier_cutoff,
+                cell_size=tier_cell_size,
+                num_trajectories=num_trajectories,
+                input_io_spec=input_io_spec,
+                dataset_label=f"the {label} coordinate dataset",
+                max_workers=max_workers,
+                frame_chunk=frame_chunk,
+                coord_chunk=coord_chunk,
+                k_chunk=k_chunk,
+                frame_window=frame_window,
+                status_path=status_log_path,
+                status_start_epoch=overall_start,
+                on_trajectory_complete=on_trajectory_complete,
+            )
+            sk_values[mask] = tier_values
+            tier_stats.append((mask, tier_stat))
+        stats = _merge_tier_trajectory_stats(tier_stats, int(k_vectors_array.shape[0]))
 
         if len(axes) == 1:
             axis_index = {"x": 0, "y": 1, "z": 2}[axes[0]]
             axis_k = np.abs(k_vectors_array[:, axis_index])
             output_array = np.column_stack((axis_k, sk_values))
         else:
-            k_magnitudes = np.linalg.norm(k_vectors_array, axis=1)
             axis_k, sk_values = _aggregate_by_tolerance(k_magnitudes, sk_values, float(shell_width))
             output_array = np.column_stack((axis_k, sk_values))
 
@@ -3012,10 +3666,6 @@ def compute_k_component_structure_factors_from_files(
                 "single_trajectory_reports": single_trajectory_reports,
             }
         )
-
-    coord_count = int(results[0]["stats"]["trajectory_results"][0].get("coord_count", 0)) if results and results[0]["stats"]["trajectory_results"] else 0
-    total_k = sum(int(item["k_values_count"]) for item in results)
-    status_logger.density(total_frames_logged, coord_count, total_k, force=True)
 
     return {
         "results": results,

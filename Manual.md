@@ -849,29 +849,266 @@ If the correction is enabled, the output file ends with:
 
 ## Module 6: Static Structure Factor
 
-This module generates scripts for isotropic static-structure-factor analysis from saved coordinate arrays.
+This module generates scripts for density structure factors and charge-dipole structure factors from saved numeric trajectory data.
 
 ## Common Parameters
 
-- `Base Directory`: root folder used to resolve relative coordinate paths
+- `Base Directory`: root folder used to resolve relative input and output paths
 - `Common Terms`: optional `*` and `**` replacements, exactly like the other modules
+- `Number of Trajectories`: optional limit on how many discovered trajectory files or file sets are used; leave blank to use all discovered inputs
+- `Max Workers`: maximum worker processes used when the density structure-factor calculations average over multiple trajectory files
 
-## Structure Factor
+## Density Structure Factor Tab
 
-### Isotropic Structure Factor
+This tab contains three density-based calculations:
 
-- `Coordinate Path`: path pattern for the coordinate dataset
-- `Output Path`: full output path and filename for the generated `S(k)` table
-- `k Max`: maximum reciprocal-space magnitude included in the generated `k` list
-- `L_x`, `L_y`, `L_z`: orthorhombic box lengths used for reciprocal-vector generation and minimum-image distances
-- `tolerance`: tolerance used to merge nearby `|k|` magnitudes into unique isotropic sampling values
-- `Trajectory desired length (optional)`: a single integer uses the first `N` frames from each coordinate file; `range(start, stop[, step])` uses that frame window from each file
+- `Isotropic`
+- `Directional`
+- `Along k components`
+
+All three use saved coordinate arrays, not raw DCD files.
+
+### Shared Density-Tab Fields
+
+- `Coordinate Path`: path pattern for coordinate arrays; supports `*`, `**`, and `{i}`
+- `Stride`: frame stride applied before the structure-factor calculation; `1` means use every saved frame
+- `Output Path`: final output file written by that calculation
+- `L_x`, `L_y`, `L_z`: orthorhombic box lengths used to build reciprocal-space vectors and to apply minimum-image distances
+- `Shell Width`: positive tolerance used when nearby `|k|` values are grouped together
+- `CO-1`, `CO-2`, `CO-3`: optional real-space cutoffs applied to the first, second, and third `k` tiers
+- `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`; each cell-size value is used only for the matching cutoff tier
+- `k Max 1`, `k Max 2`, `k Max 3`: upper bounds for the first, second, and third reciprocal-space tiers
+- `Resolution: res. 1`, `res. 2`, `res. 3`: minimum `|k|` spacing kept in the first, second, and third reciprocal-space tiers
+- `Trajectory desired length (optional)`: a single integer means use the first `N` frames from each file; `range(start, stop[, step])` means use that frame window from each file
+- `Chunk Sizes`: opens the dialog for density-structure-factor chunk sizes
+
+### What The Three `k` Tiers Mean
+
+The density calculations build one reciprocal-space sampling list in three contiguous ranges:
+
+- tier 1: `0 < |k| <= k Max 1`
+- tier 2: `k Max 1 < |k| <= k Max 2`
+- tier 3: `k Max 2 < |k| <= k Max 3`
+
+Rules:
+
+- `k Max 1` may be `0`; `k Max 2` and `k Max 3` must be positive
+- the values must satisfy `k Max 1 <= k Max 2 <= k Max 3`
+- each tier has its own `k` resolution and optional cutoff
+- each tier can also have its own optional cell size for the cutoff-based neighbor search
+- if `k Max 2`, `k Max 3`, `res. 2`, or `res. 3` are left empty, the generated script reuses the previous tier value
+
+Practical meaning:
+
+- smaller resolution, such as `0.05`: keep more closely spaced reciprocal-space magnitudes or vectors in that tier
+- larger resolution, such as `0.20`: keep a sparser `k` sampling in that tier
+- smaller `k Max`: lower reciprocal-space coverage
+- larger `k Max`: more reciprocal-space coverage and more work
+
+### What `k_x`, `k_y`, and `k_z` Mean
+
+The directional and component-based calculations use explicit reciprocal-space vectors
+
+```text
+k = (k_x, k_y, k_z)
+```
+
+with
+
+```text
+k_x = 2*pi*n_x/L_x
+k_y = 2*pi*n_y/L_y
+k_z = 2*pi*n_z/L_z
+```
+
+where the generated density-tab vectors use non-negative integers `n_x`, `n_y`, and `n_z`, and the all-zero vector is excluded.
+
+So:
+
+- `k_x`, `k_y`, `k_z` are the Cartesian components of the sampled reciprocal-space vector
+- `|k| = sqrt(k_x^2 + k_y^2 + k_z^2)` is its magnitude
+- `L_x`, `L_y`, `L_z` set the spacing of allowed reciprocal-space values along each box direction
+
+### Isotropic
+
+This calculation averages the density structure factor over unique `|k|` values.
+
+How the `k` list is built:
+
+- candidate reciprocal-space magnitudes are generated from the box lengths and the three `k Max` tiers
+- nearby magnitudes are merged using `Shell Width`
+- the final isotropic table is written as one row per unique `|k|`
+
+Main output format:
+
+- column 1: `|k|`
+- column 2: `S(k)`
 
 Notes:
 
-- `Coordinate Path` and `Output Path` support `*` and `**`; `Coordinate Path` also supports `{i}`
-- the current module writes one `S(k)` table to the specified output path
-- isothermal compressibility is intentionally not included in this version of the module
+- this mode produces an isotropic average, so the output does not preserve the original `k_x`, `k_y`, `k_z` direction of each reciprocal vector
+- `CO-1`, `CO-2`, and `CO-3` apply to pair distances in real space for the matching `k` tier
+
+### Directional
+
+This calculation keeps each sampled reciprocal vector explicitly instead of collapsing everything to `|k|`.
+
+Main output format:
+
+- column 1: `k_x`
+- column 2: `k_y`
+- column 3: `k_z`
+- column 4: `|k|`
+- column 5: `S(k)`
+
+Use this when you want anisotropic information, for example to distinguish different reciprocal-space directions that have the same `|k|`.
+
+In the current implementation, the directional output keeps every sampled `k` vector as its own row, so `Shell Width` does not merge rows in this mode.
+
+### Along `k` Components
+
+This calculation restricts the reciprocal-space vectors to selected axis combinations and writes one output file per selection.
+
+Field:
+
+- `Components`: comma-separated selections such as `x`, `y`, `z`, `x+y`, `x+z`, `y+z`, or `x+y+z`
+
+How selections are interpreted:
+
+- `x`: only the `x` direction is active, so vectors are of the form `(k_x, 0, 0)` with `k_x > 0`
+- `y`: vectors are `(0, k_y, 0)` with `k_y > 0`
+- `z`: vectors are `(0, 0, k_z)` with `k_z > 0`
+- `x+y`: vectors are `(k_x, k_y, 0)` with `k_x` and `k_y` sampled and `k_z = 0`
+- `x+z`: vectors are `(k_x, 0, k_z)`
+- `y+z`: vectors are `(0, k_y, k_z)`
+- `x+y+z`: vectors are `(k_x, k_y, k_z)`
+
+Important meaning:
+
+- a component selection names which reciprocal-space axes are allowed to vary
+- it does not mean arithmetic addition of already-computed one-dimensional curves
+- for mixed selections such as `x+y`, the calculation still uses the full vector magnitude internally
+
+Output naming:
+
+- if you request one component only, the exact `Output Path` is used
+- if you request multiple components, the software appends the component label before the extension, for example `output_kx.dat`, `output_ky.dat`, or `output_kxy.dat`
+
+Output format for one-axis selections:
+
+- column 1: `|k_x|`, `|k_y|`, or `|k_z|` for the selected axis
+- column 2: `S(k)`
+
+Output format for multi-axis selections such as `x+y`, `x+z`, `y+z`, and `x+y+z`:
+
+- column 1: shell-averaged `|k|`
+- column 2: shell-averaged `S(k)`
+
+In other words:
+
+- one-axis selections stay one-dimensional in the chosen Cartesian component
+- multi-axis selections are grouped by total magnitude using `Shell Width`
+
+### Density-Tab Auxiliary Files
+
+The generated scripts may also write:
+
+- per-trajectory reports next to the main output, with names like `output_1.dat`, `output_2.dat`, and so on
+- `status.log` in the output directory
+
+Each per-trajectory report contains the same column layout as the corresponding main output, but for one trajectory file only.
+
+## Charge-Dipole Structure Factor Tab
+
+This tab computes charge-dipole structure factors from:
+
+- one charge-values file
+- one set of charge-coordinate files
+- one set of dipole-position files
+- one set of dipole-vector files
+
+The charge-coordinate, dipole-position, and dipole-vector patterns must resolve to the same number of files.
+
+### Charge-Dipole Fields
+
+- `Calculation Mode`: either `Directional` or `Isotropic`
+- `Charge Values Path`: file containing the charge values
+- `Charge Coordinates Path`: coordinate pattern for charge positions
+- `Charge Coordinates Stride`: frame stride for the charge-coordinate input
+- `Dipole Positions Path`: coordinate pattern for dipole positions
+- `Dipole Positions Stride`: frame stride for dipole-position input
+- `Dipole Vectors Path`: vector pattern for dipole directions; the GUI keeps its stride matched to the dipole-position stride
+- `Isotropic Output Path`: isotropic charge-dipole output file
+- `Directional Output Path`: directional charge-dipole output file; required only in directional mode
+- `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`
+- `Delete Residue Index (optional)`: optional zero-based charge-site index removed from the charge values and charge-coordinate arrays before calculation
+- `Trajectory desired length (optional)`: same syntax as the density tab
+
+### Charge-Dipole `k` Parameters
+
+The charge-dipole tab also uses three `k` tiers, but the meaning of the resolution or stride fields depends on the selected mode.
+
+In `Directional` mode:
+
+- `Stride 1`, `Stride 2`, `Stride 3` are integer down-sampling factors for explicit reciprocal vectors
+
+In `Isotropic` mode:
+
+- `Stride 1`, `Stride 2`, `Stride 3` act as `k` resolutions, not integer list strides
+- each value is the minimum spacing kept between neighboring isotropic `|k|` values within that tier
+
+### Charge-Dipole Directional Mode
+
+This mode writes both a directional table and an isotropic shell average derived from it.
+
+Directional output format:
+
+- column 1: `k_x`
+- column 2: `k_y`
+- column 3: `k_z`
+- column 4: `|k|`
+- column 5: real part of the charge-dipole structure factor
+- column 6: imaginary part of the charge-dipole structure factor
+
+Isotropic output format produced from the directional data:
+
+- column 1: shell-averaged `|k|`
+- column 2: real part
+- column 3: imaginary part
+- column 4: number of directional `k` vectors contributing to that shell
+
+`Shell Width` is required in this mode because it controls that shell average.
+
+### Charge-Dipole Isotropic Mode
+
+This mode writes one isotropic table directly.
+
+Output format:
+
+- column 1: `|k|`
+- column 2: total isotropic value normalized by the total number of dipoles
+- column 3: isotropic value normalized by the number of dipoles that lie inside the cutoff
+
+In this mode, the `Stride` fields are `k`-resolution settings, and `Shell Width` is not used by the calculation.
+
+### Charge-Dipole Cutoffs And Extra Output
+
+`CO-1`, `CO-2`, and `CO-3` are optional real-space cutoffs matched to the three `k` tiers.
+
+`CS-1`, `CS-2`, and `CS-3` are the matching cell sizes used with those cutoff tiers. If a cutoff is provided and the matching cell size is left empty, the generated workflow falls back to using the cutoff value as the cell size.
+
+When a cutoff is used:
+
+- the script tracks how many dipoles are inside the cutoff for each processed frame
+- it writes `dipoles_in_cutoff.dat` in the same output directory
+
+### Charge-Dipole Auxiliary Files
+
+The generated scripts may also write:
+
+- per-file-set reports such as `output_1.dat`, `output_2.dat`, and so on
+- `status.log`
+- `dipoles_in_cutoff.dat`
 
 ## Final notes
 
