@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import os
 import re
 import sys
@@ -520,6 +521,126 @@ def parse_k_component_selection(selection: str) -> list[tuple[str, ...]]:
     if not parsed:
         raise ValueError("At least one valid k-component selection is required.")
     return parsed
+
+
+def _eval_trajectory_selection_expr(selection_str: str) -> list[int]:
+    allowed_nodes = (
+        ast.Expression,
+        ast.List,
+        ast.Tuple,
+        ast.Set,
+        ast.ListComp,
+        ast.SetComp,
+        ast.GeneratorExp,
+        ast.comprehension,
+        ast.Call,
+        ast.Name,
+        ast.Load,
+        ast.Constant,
+        ast.UnaryOp,
+        ast.USub,
+        ast.BinOp,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Compare,
+        ast.Eq,
+        ast.NotEq,
+        ast.Lt,
+        ast.LtE,
+        ast.Gt,
+        ast.GtE,
+        ast.IfExp,
+    )
+
+    tree = ast.parse(selection_str, mode="eval")
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed_nodes):
+            raise ValueError(f"Unsupported expression element: {type(node).__name__}")
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name) or node.func.id != "range":
+                raise ValueError("Only range() function calls are allowed")
+
+    value = eval(compile(tree, "<trajectory_selection>", "eval"), {"__builtins__": {}}, {"range": range})
+    if isinstance(value, range):
+        return list(value)
+    if isinstance(value, (list, tuple, set)):
+        return [int(item) for item in value]
+    return [int(item) for item in value]
+
+
+def parse_trajectory_selection(selection_str: str, num_trajectories: int) -> list[int]:
+    if not str(selection_str or "").strip():
+        return list(range(num_trajectories))
+
+    trajectory_indices: list[int] = []
+    selection_str = str(selection_str).strip()
+
+    try:
+        if selection_str.startswith(("[", "(", "{")) or "for" in selection_str:
+            trajectory_indices = _eval_trajectory_selection_expr(selection_str)
+            for idx in trajectory_indices:
+                if idx < 0 or idx >= num_trajectories:
+                    raise ValueError(f"Trajectory index {idx} is outside valid range (0-{num_trajectories-1})")
+            trajectory_indices = sorted(set(int(i) for i in trajectory_indices))
+            if not trajectory_indices:
+                raise ValueError("No valid trajectory indices found")
+            return trajectory_indices
+
+        if selection_str.startswith("range(") and selection_str.endswith(")"):
+            range_content = selection_str[6:-1]
+            parts = [p.strip() for p in range_content.split(",")]
+            if len(parts) == 1:
+                trajectory_indices = list(range(int(parts[0])))
+            elif len(parts) == 2:
+                trajectory_indices = list(range(int(parts[0]), int(parts[1])))
+            elif len(parts) == 3:
+                trajectory_indices = list(range(int(parts[0]), int(parts[1]), int(parts[2])))
+            else:
+                raise ValueError(f"Invalid range format: {selection_str}")
+            for idx in trajectory_indices:
+                if idx < 0 or idx >= num_trajectories:
+                    raise ValueError(
+                        f"Range {selection_str} contains index {idx} outside valid trajectory range (0-{num_trajectories-1})"
+                    )
+        else:
+            ranges = [r.strip() for r in selection_str.split(",")]
+            for range_str in ranges:
+                if "-" in range_str:
+                    start_text, end_text = range_str.split("-", 1)
+                    start = int(start_text.strip())
+                    end = int(end_text.strip())
+                    if start > end:
+                        raise ValueError(f"Invalid range: {range_str} (start > end)")
+                    if start < 0 or end >= num_trajectories:
+                        raise ValueError(f"Range {range_str} is outside valid trajectory range (0-{num_trajectories-1})")
+                    trajectory_indices.extend(range(start, end + 1))
+                else:
+                    index = int(range_str.strip())
+                    if index < 0 or index >= num_trajectories:
+                        raise ValueError(f"Trajectory index {index} is outside valid range (0-{num_trajectories-1})")
+                    trajectory_indices.append(index)
+
+        trajectory_indices = sorted(set(trajectory_indices))
+        if not trajectory_indices:
+            raise ValueError("No valid trajectory indices found")
+        return trajectory_indices
+    except ValueError as exc:
+        if "invalid literal for int()" in str(exc):
+            raise ValueError(
+                f"Invalid trajectory selection format: '{selection_str}'. Use formats like '4-10', "
+                "'4-6,8-10', 'range(10,20)', or a Python expression"
+            ) from exc
+        raise
+
+
+def _selected_trajectory_indices(total_count: int, num_trajectories: int | None, trajectory_selection: str | None) -> list[int]:
+    if num_trajectories is not None and int(num_trajectories) <= 0:
+        raise ValueError("num_trajectories must be positive when provided.")
+    available_count = min(total_count, int(num_trajectories)) if num_trajectories is not None else total_count
+    return parse_trajectory_selection(trajectory_selection or "", available_count)
 
 
 def component_label(axes: tuple[str, ...]) -> str:
@@ -1777,6 +1898,7 @@ def compute_charge_dipole_structure_factor_from_files(
     cutoff: float | None = None,
     cell_size: float | None = None,
     num_trajectories: int | None = None,
+    trajectory_selection: str | None = None,
     delete_residue_index: int | None = None,
     frame_chunk: int | None = None,
     charge_chunk: int | None = None,
@@ -1853,13 +1975,6 @@ def compute_charge_dipole_structure_factor_from_files(
     charge_coordinate_files = _discover_coordinate_files(baseDir, charge_coords_pattern)
     dipole_position_files = _discover_coordinate_files(baseDir, dipole_positions_pattern)
     dipole_vector_files = _discover_coordinate_files(baseDir, dipole_vectors_pattern)
-    if num_trajectories is not None and int(num_trajectories) <= 0:
-        raise ValueError("num_trajectories must be positive when provided.")
-    if num_trajectories is not None:
-        limit = int(num_trajectories)
-        charge_coordinate_files = charge_coordinate_files[:limit]
-        dipole_position_files = dipole_position_files[:limit]
-        dipole_vector_files = dipole_vector_files[:limit]
     file_counts = {
         "charge coordinate": len(charge_coordinate_files),
         "dipole position": len(dipole_position_files),
@@ -1870,6 +1985,11 @@ def compute_charge_dipole_structure_factor_from_files(
             "Charge-dipole structure-factor inputs must resolve to the same number of files. "
             f"Discovered counts: {file_counts}"
         )
+    trajectory_indices = _selected_trajectory_indices(len(charge_coordinate_files), num_trajectories, trajectory_selection)
+    selected_file_indices = [index + 1 for index in trajectory_indices]
+    charge_coordinate_files = [charge_coordinate_files[index] for index in trajectory_indices]
+    dipole_position_files = [dipole_position_files[index] for index in trajectory_indices]
+    dipole_vector_files = [dipole_vector_files[index] for index in trajectory_indices]
 
     k_magnitudes, k_vectors_array = charge_dipole_k_vectors_three_tier(
         float(Lx),
@@ -1944,13 +2064,19 @@ def compute_charge_dipole_structure_factor_from_files(
             f"trajectory desired length: range({frame_window[0]}, {frame_window[1]}, {frame_window[2]})",
             flush=True,
         )
+    print(f"file sets used: {len(selected_file_indices)}", flush=True)
+    if trajectory_selection:
+        print(f"trajectory selection: {trajectory_indices}", flush=True)
 
-    for file_index, (rq_file, rp_file, mu_file) in enumerate(
-        zip(charge_coordinate_files, dipole_position_files, dipole_vector_files, strict=False),
-        start=1,
+    for file_index, rq_file, rp_file, mu_file in zip(
+        selected_file_indices,
+        charge_coordinate_files,
+        dipole_position_files,
+        dipole_vector_files,
+        strict=False,
     ):
         trajectory_start = time.time()
-        print(f"\nProcessing charge-dipole file set {file_index}/{len(charge_coordinate_files)}", flush=True)
+        print(f"\nProcessing charge-dipole file set {file_index} ({len(per_file_stats) + 1}/{len(charge_coordinate_files)})", flush=True)
         print(f"  charge coordinates: {rq_file}", flush=True)
         print(f"  dipole positions:   {rp_file}", flush=True)
         print(f"  dipole vectors:     {mu_file}", flush=True)
@@ -2216,6 +2342,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     cutoff: float | None = None,
     cell_size: float | None = None,
     num_trajectories: int | None = None,
+    trajectory_selection: str | None = None,
     delete_residue_index: int | None = None,
     frame_chunk: int | None = None,
     charge_chunk: int | None = None,
@@ -2289,13 +2416,6 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     charge_coordinate_files = _discover_coordinate_files(baseDir, charge_coords_pattern)
     dipole_position_files = _discover_coordinate_files(baseDir, dipole_positions_pattern)
     dipole_vector_files = _discover_coordinate_files(baseDir, dipole_vectors_pattern)
-    if num_trajectories is not None and int(num_trajectories) <= 0:
-        raise ValueError("num_trajectories must be positive when provided.")
-    if num_trajectories is not None:
-        limit = int(num_trajectories)
-        charge_coordinate_files = charge_coordinate_files[:limit]
-        dipole_position_files = dipole_position_files[:limit]
-        dipole_vector_files = dipole_vector_files[:limit]
     file_counts = {
         "charge coordinate": len(charge_coordinate_files),
         "dipole position": len(dipole_position_files),
@@ -2306,6 +2426,11 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
             "Charge-dipole structure-factor inputs must resolve to the same number of files. "
             f"Discovered counts: {file_counts}"
         )
+    trajectory_indices = _selected_trajectory_indices(len(charge_coordinate_files), num_trajectories, trajectory_selection)
+    selected_file_indices = [index + 1 for index in trajectory_indices]
+    charge_coordinate_files = [charge_coordinate_files[index] for index in trajectory_indices]
+    dipole_position_files = [dipole_position_files[index] for index in trajectory_indices]
+    dipole_vector_files = [dipole_vector_files[index] for index in trajectory_indices]
 
     k_magnitudes = charge_dipole_k_magnitudes_by_resolution_three_tier(
         float(Lx),
@@ -2377,13 +2502,19 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
             f"trajectory desired length: range({frame_window[0]}, {frame_window[1]}, {frame_window[2]})",
             flush=True,
         )
+    print(f"file sets used: {len(selected_file_indices)}", flush=True)
+    if trajectory_selection:
+        print(f"trajectory selection: {trajectory_indices}", flush=True)
 
-    for file_index, (rq_file, rp_file, mu_file) in enumerate(
-        zip(charge_coordinate_files, dipole_position_files, dipole_vector_files, strict=False),
-        start=1,
+    for file_index, rq_file, rp_file, mu_file in zip(
+        selected_file_indices,
+        charge_coordinate_files,
+        dipole_position_files,
+        dipole_vector_files,
+        strict=False,
     ):
         trajectory_start = time.time()
-        print(f"\nProcessing isotropic charge-dipole file set {file_index}/{len(charge_coordinate_files)}", flush=True)
+        print(f"\nProcessing isotropic charge-dipole file set {file_index} ({len(per_file_stats) + 1}/{len(charge_coordinate_files)})", flush=True)
         print(f"  charge coordinates: {rq_file}", flush=True)
         print(f"  dipole positions:   {rp_file}", flush=True)
         print(f"  dipole vectors:     {mu_file}", flush=True)
@@ -2592,6 +2723,7 @@ def _compute_dataset_average(
     cutoff: float | None,
     cell_size: float | None,
     num_trajectories: int | None,
+    trajectory_indices: list[int] | None,
     input_io_spec: dict[str, Any] | None,
     dataset_label: str,
     max_workers: int,
@@ -2609,7 +2741,9 @@ def _compute_dataset_average(
     failed: list[dict[str, Any]] = []
     trajectory_results: list[dict[str, Any]] = []
 
-    selected_files = coordinate_files[: int(num_trajectories)] if num_trajectories is not None else coordinate_files
+    if trajectory_indices is None:
+        trajectory_indices = _selected_trajectory_indices(len(coordinate_files), num_trajectories, None)
+    selected_pairs = [(index + 1, coordinate_files[index]) for index in trajectory_indices]
 
     task_args = [
         (
@@ -2628,7 +2762,7 @@ def _compute_dataset_average(
             status_path,
             status_start_epoch,
         )
-        for index, file_path in enumerate(selected_files, start=1)
+        for index, file_path in selected_pairs
     ]
 
     if int(max_workers) > 1 and len(task_args) > 1:
@@ -2680,6 +2814,7 @@ def _compute_dataset_average_directional(
     cutoff: float | None,
     cell_size: float | None,
     num_trajectories: int | None,
+    trajectory_indices: list[int] | None,
     input_io_spec: dict[str, Any] | None,
     dataset_label: str,
     max_workers: int,
@@ -2697,7 +2832,9 @@ def _compute_dataset_average_directional(
     failed: list[dict[str, Any]] = []
     trajectory_results: list[dict[str, Any]] = []
 
-    selected_files = coordinate_files[: int(num_trajectories)] if num_trajectories is not None else coordinate_files
+    if trajectory_indices is None:
+        trajectory_indices = _selected_trajectory_indices(len(coordinate_files), num_trajectories, None)
+    selected_pairs = [(index + 1, coordinate_files[index]) for index in trajectory_indices]
 
     task_args = [
         (
@@ -2716,7 +2853,7 @@ def _compute_dataset_average_directional(
             status_path,
             status_start_epoch,
         )
-        for index, file_path in enumerate(selected_files, start=1)
+        for index, file_path in selected_pairs
     ]
 
     if int(max_workers) > 1 and len(task_args) > 1:
@@ -2991,6 +3128,7 @@ def compute_static_structure_factor_from_files(
     cell_size_tertiary: float | None = None,
     cutoff: float | None = None,
     num_trajectories: int | None = None,
+    trajectory_selection: str | None = None,
     max_workers: int = 1,
     frame_chunk: int = 10,
     coord_chunk: int = 256,
@@ -3042,8 +3180,7 @@ def compute_static_structure_factor_from_files(
     if not is_valid:
         raise ValueError(f"Invalid Coordinate Path: {error_message}")
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
-    if num_trajectories is not None and int(num_trajectories) <= 0:
-        raise ValueError("num_trajectories must be positive when provided.")
+    trajectory_indices = _selected_trajectory_indices(len(coordinate_files), num_trajectories, trajectory_selection)
 
     box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
     if np.any(box <= 0):
@@ -3107,9 +3244,10 @@ def compute_static_structure_factor_from_files(
         f"chunk sizes: frame={int(frame_chunk)}, coordinates={int(coord_chunk)}, k={int(k_chunk)}",
         flush=True,
     )
-    used_file_count = min(len(coordinate_files), int(num_trajectories)) if num_trajectories is not None else len(coordinate_files)
     print(f"coordinate files discovered: {len(coordinate_files)}", flush=True)
-    print(f"coordinate files used: {used_file_count}", flush=True)
+    print(f"coordinate files used: {len(trajectory_indices)}", flush=True)
+    if trajectory_selection:
+        print(f"trajectory selection: {trajectory_indices}", flush=True)
     tier_masks = _three_tier_masks_from_magnitudes(
         k_vals,
         k_max_primary,
@@ -3169,6 +3307,7 @@ def compute_static_structure_factor_from_files(
             cutoff=tier_cutoff,
             cell_size=tier_cell_size,
             num_trajectories=num_trajectories,
+            trajectory_indices=trajectory_indices,
             input_io_spec=input_io_spec,
             dataset_label="the coordinate dataset",
             max_workers=max_workers,
@@ -3234,6 +3373,7 @@ def compute_directional_structure_factor_from_files(
     cell_size_tertiary: float | None = None,
     cutoff: float | None = None,
     num_trajectories: int | None = None,
+    trajectory_selection: str | None = None,
     max_workers: int = 1,
     frame_chunk: int = 10,
     coord_chunk: int = 256,
@@ -3286,8 +3426,7 @@ def compute_directional_structure_factor_from_files(
     if not is_valid:
         raise ValueError(f"Invalid Coordinate Path: {error_message}")
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
-    if num_trajectories is not None and int(num_trajectories) <= 0:
-        raise ValueError("num_trajectories must be positive when provided.")
+    trajectory_indices = _selected_trajectory_indices(len(coordinate_files), num_trajectories, trajectory_selection)
 
     box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
     if np.any(box <= 0):
@@ -3337,9 +3476,10 @@ def compute_directional_structure_factor_from_files(
         print(f"{label}: {float(value):.8f}" if value is not None else f"{label}: none", flush=True)
     print(f"directional k vectors: {int(k_vectors_array.shape[0])}", flush=True)
     print(f"anticipated directional S(k) output shape: {(int(k_vectors_array.shape[0]), 5)}", flush=True)
-    used_file_count = min(len(coordinate_files), int(num_trajectories)) if num_trajectories is not None else len(coordinate_files)
     print(f"coordinate files discovered: {len(coordinate_files)}", flush=True)
-    print(f"coordinate files used: {used_file_count}", flush=True)
+    print(f"coordinate files used: {len(trajectory_indices)}", flush=True)
+    if trajectory_selection:
+        print(f"trajectory selection: {trajectory_indices}", flush=True)
     if frame_window is None:
         print("trajectory desired length: full trajectory", flush=True)
     else:
@@ -3406,6 +3546,7 @@ def compute_directional_structure_factor_from_files(
             cutoff=tier_cutoff,
             cell_size=tier_cell_size,
             num_trajectories=num_trajectories,
+            trajectory_indices=trajectory_indices,
             input_io_spec=input_io_spec,
             dataset_label="the directional coordinate dataset",
             max_workers=max_workers,
@@ -3478,6 +3619,7 @@ def compute_k_component_structure_factors_from_files(
     cell_size_tertiary: float | None = None,
     cutoff: float | None = None,
     num_trajectories: int | None = None,
+    trajectory_selection: str | None = None,
     max_workers: int = 1,
     frame_chunk: int = 10,
     coord_chunk: int = 256,
@@ -3498,8 +3640,7 @@ def compute_k_component_structure_factors_from_files(
     )
     components = parse_k_component_selection(components_selection)
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
-    if num_trajectories is not None and int(num_trajectories) <= 0:
-        raise ValueError("num_trajectories must be positive when provided.")
+    trajectory_indices = _selected_trajectory_indices(len(coordinate_files), num_trajectories, trajectory_selection)
     box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
@@ -3623,6 +3764,7 @@ def compute_k_component_structure_factors_from_files(
                 cutoff=tier_cutoff,
                 cell_size=tier_cell_size,
                 num_trajectories=num_trajectories,
+                trajectory_indices=trajectory_indices,
                 input_io_spec=input_io_spec,
                 dataset_label=f"the {label} coordinate dataset",
                 max_workers=max_workers,

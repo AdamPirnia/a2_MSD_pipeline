@@ -880,6 +880,7 @@ All three use saved coordinate arrays, not raw DCD files.
 - `k Max 1`, `k Max 2`, `k Max 3`: upper bounds for the first, second, and third reciprocal-space tiers
 - `Resolution: res. 1`, `res. 2`, `res. 3`: minimum `|k|` spacing kept in the first, second, and third reciprocal-space tiers
 - `Trajectory desired length (optional)`: a single integer means use the first `N` frames from each file; `range(start, stop[, step])` means use that frame window from each file
+- `Trajectory Selection`: optional zero-based subset of trajectory indices to process from `Number of Trajectories`; supports the same syntax as `DCD Selection (optional)`
 - `Chunk Sizes`: opens the dialog for density-structure-factor chunk sizes
 
 ### What The Three `k` Tiers Mean
@@ -1043,6 +1044,7 @@ The charge-coordinate, dipole-position, and dipole-vector patterns must resolve 
 - `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`
 - `Delete Residue Index (optional)`: optional zero-based charge-site index removed from the charge values and charge-coordinate arrays before calculation
 - `Trajectory desired length (optional)`: same syntax as the density tab
+- `Trajectory Selection`: optional zero-based subset of trajectory indices to process from `Number of Trajectories`; supports the same syntax as `DCD Selection (optional)`
 
 ### Charge-Dipole `k` Parameters
 
