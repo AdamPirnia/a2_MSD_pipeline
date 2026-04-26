@@ -280,6 +280,30 @@ Fields:
 Option:
 
 - `Use Parallel`: enable parallel processing for the unwrapping step
+- `Fix 1st Frame`: optionally repair molecules that are already split across periodic boundaries in the first input frame before continuous coordinates are reconstructed
+
+When `Fix 1st Frame` is checked, Step 2 enables extra metadata fields in the Options section:
+
+- `PSF Pattern`: PSF file pattern used to resolve atom grouping for the first-frame repair
+- `Target Selection`: VMD atom selection matching the atom order in the Step 2 coordinate input files
+- `VMD Path`: VMD executable used to resolve the PSF and atom selection
+- `Grouping Unit`: grouping used to define each molecule or unit to repair; currently `residue`, `chain`, or `segname`
+
+### What `Fix 1st Frame` does
+
+Use this option when the Step 2 input trajectory starts from a later part of a longer trajectory and the first saved frame already contains molecules split across periodic boundaries.
+
+When enabled, Step 2:
+
+- resolves the selected atoms and groups using the Step 2 `PSF Pattern`, `Target Selection`, `VMD Path`, and `Grouping Unit`
+- repairs the first coordinate frame group by group so each selected group is made whole using minimum-image offsets
+- computes the exact per-atom coordinate shifts between the original first frame and the repaired first frame
+- applies those same per-atom shifts to every frame in the Step 2 input coordinate file
+- then runs the normal continuous-coordinate unwrapping algorithm
+
+The `Target Selection` used for `Fix 1st Frame` must match the atom order in the Step 2 input coordinate files. If the resolved atom count does not match the coordinate file width, the workflow stops with an error.
+
+If `Fix 1st Frame` is unchecked, Step 2 behaves as before and uses the first frame exactly as it appears in the input coordinate file.
 
 What this section does:
 

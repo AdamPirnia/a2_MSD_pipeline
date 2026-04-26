@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import subprocess
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
@@ -70,6 +71,19 @@ def validate_path_pattern(pattern):
     return True, ""
 
 
+def _tcl_quote(value):
+    """Return a Tcl-safe double-quoted string literal body."""
+    text = str(value)
+    text = text.replace("\\", "\\\\")
+    text = text.replace("\"", "\\\"")
+    text = text.replace("$", "\\$")
+    text = text.replace("[", "\\[")
+    text = text.replace("]", "\\]")
+    text = text.replace("\n", "\\n")
+    text = text.replace("\r", "\\r")
+    return text
+
+
 def _load_coordinate_array(input_file, dtype=np.float32, io_spec=None):
     """Load coordinate data using the configured storage mode and precision."""
     data = load_numeric_array(
@@ -110,7 +124,24 @@ def _resolve_usable_atom_count(num_atoms, n_cols):
     return usable_atoms
 
     
-def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None, num_dcd=None, max_workers=None, chunk_size=None, dcd_indices=None, common_term="", input_io_spec=None, output_io_spec=None):
+def unwrapper(
+    baseDir,
+    input_pattern=None,
+    output_pattern=None,
+    xsc_pattern=None,
+    num_dcd=None,
+    max_workers=None,
+    chunk_size=None,
+    dcd_indices=None,
+    common_term="",
+    input_io_spec=None,
+    output_io_spec=None,
+    psf_pattern=None,
+    target_selection=None,
+    vmd=None,
+    grouping_unit="residue",
+    repair_first_frame=False,
+):
     """
     Read a series of coordinates directly extracted from MD trajectories, unwrap 
     periodic boundary crossings, and write out unwrapped coordinate files with
@@ -195,6 +226,18 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
     is_valid, error_msg = validate_path_pattern(xsc_pattern)
     if not is_valid:
         raise ValueError(f"Invalid XSC pattern: {error_msg}")
+
+    first_frame_repair_enabled = bool(
+        repair_first_frame
+        and psf_pattern
+        and target_selection
+        and vmd
+        and grouping_unit in {"residue", "chain", "segname"}
+    )
+    if first_frame_repair_enabled:
+        is_valid, error_msg = validate_path_pattern(psf_pattern)
+        if not is_valid:
+            raise ValueError(f"Invalid PSF pattern for first-frame repair: {error_msg}")
     
     print(f"{'='*50}")
     print(f"COORDINATE UNWRAPPING")
@@ -205,6 +248,7 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
     print(f"XSC pattern: {xsc_pattern}")
     print(f"Common term: {common_term}")
     print(f"Number of DCDs: {num_dcd}")
+    print(f"Repair first frame by {grouping_unit}: {first_frame_repair_enabled}")
     
     # Determine indices to process
     if dcd_indices is None:
@@ -270,7 +314,8 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
             try:
                 _unwrap_single_file(
                     i, baseDir, input_pattern, output_pattern, xsc_pattern,
-                    box_size, chunk_size, common_term, input_io_spec, output_io_spec
+                    box_size, chunk_size, common_term, input_io_spec, output_io_spec,
+                    psf_pattern, target_selection, vmd, grouping_unit, first_frame_repair_enabled
                 )
                 results['success'] += 1
                 print(f"✓ Completed file {i}")
@@ -285,7 +330,8 @@ def unwrapper(baseDir, input_pattern=None, output_pattern=None, xsc_pattern=None
                 executor.submit(
                     _unwrap_single_file, 
                     i, baseDir, input_pattern, output_pattern, xsc_pattern,
-                    box_size, chunk_size, common_term, input_io_spec, output_io_spec
+                    box_size, chunk_size, common_term, input_io_spec, output_io_spec,
+                    psf_pattern, target_selection, vmd, grouping_unit, first_frame_repair_enabled
                 ): i 
                 for i in dcd_list
             }
@@ -355,8 +401,136 @@ def _validate_unwrapped_shapes(baseDir, output_pattern, sample_indices, expected
             print(result)
 
 
+def _resolve_first_frame_group_indices(file_index, baseDir, psf_pattern, target_selection, vmd_path, grouping_unit, common_term=""):
+    """Ask VMD for selected atom grouping, preserving the Step 1 selection order."""
+
+    psf_file_rel = expand_path_pattern(psf_pattern, common_term, file_index)
+    psf_file = os.path.join(baseDir, psf_file_rel)
+    if not os.path.exists(psf_file):
+        raise FileNotFoundError(f"PSF file for first-frame repair not found: {psf_file}")
+    if os.path.getsize(psf_file) <= 0:
+        raise ValueError(_format_unreadable_file_message("PSF", psf_file))
+
+    os.makedirs("writenCodes", exist_ok=True)
+    os.makedirs("logs", exist_ok=True)
+    tcl_filename = f"unwrap_groups_{common_term}_{file_index}.tcl" if common_term else f"unwrap_groups_{file_index}.tcl"
+    script_path = os.path.join("writenCodes", tcl_filename)
+    log_path = os.path.join("logs", f"unwrap_groups_{file_index}.log")
+
+    with open(script_path, "w") as handle:
+        handle.write(f"""# Resolve selected atom groups for Step 2 first-frame repair
+set PSF "{_tcl_quote(psf_file)}"
+set grouping_unit "{_tcl_quote(grouping_unit)}"
+
+if {{![file exists $PSF]}} {{
+    puts "ERROR: PSF file does not exist: $PSF"
+    exit 1
+}}
+
+set molid [mol new $PSF type psf waitfor all]
+set sel [atomselect $molid "{_tcl_quote(target_selection)}"]
+set num_atoms [$sel num]
+if {{$num_atoms == 0}} {{
+    puts "ERROR: No atoms selected with criteria '{_tcl_quote(target_selection)}'"
+    exit 1
+}}
+
+set atom_groups [$sel get $grouping_unit]
+set group_order [list]
+set grouped_positions [dict create]
+set selected_position 0
+foreach group_value $atom_groups {{
+    set group_key [list $group_value]
+    if {{![dict exists $grouped_positions $group_key]}} {{
+        lappend group_order $group_key
+        dict set grouped_positions $group_key [list]
+    }}
+    dict lappend grouped_positions $group_key $selected_position
+    incr selected_position
+}}
+
+set group_position_parts [list]
+foreach group_key $group_order {{
+    lappend group_position_parts [join [dict get $grouped_positions $group_key] ","]
+}}
+
+puts "__ADMDYN_GROUP_POSITIONS__ [join $group_position_parts {{;}}]"
+$sel delete
+mol delete $molid
+exit 0
+""")
+
+    command = [vmd_path, "-dispdev", "text", "-nt", "1", "-e", script_path]
+    process = subprocess.run(command, shell=False, capture_output=True, text=True, timeout=None)
+    with open(log_path, "w") as handle:
+        handle.write(f"Command: {' '.join(command)}\n")
+        handle.write(f"Return code: {process.returncode}\n")
+        handle.write(f"STDOUT:\n{process.stdout}\n")
+        handle.write(f"STDERR:\n{process.stderr}\n")
+
+    if process.returncode != 0:
+        raise RuntimeError(f"VMD failed while resolving Step 2 first-frame groups for index {file_index}. See {log_path}")
+
+    group_indices = None
+    for line in process.stdout.splitlines():
+        marker = "__ADMDYN_GROUP_POSITIONS__"
+        if line.startswith(marker):
+            payload = line[len(marker):].strip()
+            group_indices = [
+                [int(item) for item in group_payload.split(",") if item]
+                for group_payload in payload.split(";")
+                if group_payload
+            ]
+            break
+
+    if not group_indices:
+        raise ValueError(f"No {grouping_unit} groups were resolved for Step 2 first-frame repair. See {log_path}")
+
+    return group_indices
+
+
+def _place_group_in_primary_cell(group_coords, box_size):
+    """Shift a whole group into the primary cell when its extent fits in the box."""
+
+    placed = np.array(group_coords, copy=True)
+    for axis in range(3):
+        length = box_size[axis]
+        axis_min = float(np.min(placed[:, axis]))
+        axis_max = float(np.max(placed[:, axis]))
+        width = axis_max - axis_min
+        if width < length:
+            shift_count = np.ceil(-axis_min / length)
+            shifted_min = axis_min + shift_count * length
+            shifted_max = axis_max + shift_count * length
+            if shifted_min >= 0.0 and shifted_max < length:
+                placed[:, axis] += shift_count * length
+                continue
+
+        anchor_shift = -np.floor(placed[0, axis] / length) * length
+        placed[:, axis] += anchor_shift
+    return placed
+
+
+def _repair_first_frame_by_group(first_frame, box_size, group_indices):
+    """Make each selected group whole in frame 0 and return fixed coords plus atom shifts."""
+
+    repaired = np.array(first_frame, copy=True)
+    for indices in group_indices:
+        if len(indices) <= 1:
+            repaired[indices] = np.mod(repaired[indices], box_size)
+            continue
+        reference = repaired[indices[0]].copy()
+        relative = repaired[indices] - reference
+        relative -= box_size * np.round(relative / box_size)
+        repaired_group = reference + relative
+        repaired[indices] = _place_group_in_primary_cell(repaired_group, box_size)
+    return repaired, repaired - first_frame
+
+
 def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_pattern,
-                       box_size, chunk_size, common_term, input_io_spec=None, output_io_spec=None):
+                       box_size, chunk_size, common_term, input_io_spec=None, output_io_spec=None,
+                       psf_pattern=None, target_selection=None, vmd=None, grouping_unit="residue",
+                       repair_first_frame=False):
     """Process a single coordinate file with vectorized unwrapping algorithm."""
     
     input_file_rel = expand_path_pattern(input_pattern, common_term, file_index)
@@ -387,10 +561,30 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
 
         # Reshape to (frames, atoms, 3)
         coords = coords.reshape(n_frames, usable_atoms, 3)
+
+        if repair_first_frame:
+            group_indices = _resolve_first_frame_group_indices(
+                file_index, baseDir, psf_pattern, target_selection, vmd, grouping_unit, common_term
+            )
+            grouped_positions = sorted(position for group in group_indices for position in group)
+            if grouped_positions != list(range(usable_atoms)):
+                raise ValueError(
+                    f"Step 2 first-frame repair metadata does not match coordinate width for index {file_index}: "
+                    f"VMD selection has {len(grouped_positions)} atoms, coordinate file has {usable_atoms} atoms. "
+                    "Make sure Step 1 target selection and Step 2 input files match."
+                )
+            repaired_first_frame, atom_shifts = _repair_first_frame_by_group(coords[0], box_size, group_indices)
+            shifted_atoms = int(np.count_nonzero(np.any(np.abs(atom_shifts) > 1e-6, axis=1)))
+            coords += atom_shifts.reshape(1, usable_atoms, 3)
+            coords[0] = repaired_first_frame
+            print(
+                f"✓ Fixed first frame using {len(group_indices)} {grouping_unit} group(s); "
+                f"applied shifts to {shifted_atoms} atom(s) across all frames"
+            )
         
         # Vectorized unwrapping algorithm - much more efficient than loops
         if n_frames == 1:
-            # Single frame case - no unwrapping needed
+            # Single frame case - first-frame group repair may still have been applied.
             unwrapped_flat = coords.reshape(n_frames, -1)
         else:
             # Displacements between consecutive frames: shape (T-1, N, 3)

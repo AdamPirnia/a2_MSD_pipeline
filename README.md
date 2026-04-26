@@ -80,6 +80,13 @@ This module prepares trajectory-derived data for downstream analysis. It include
 3. `COM calculation`
    Computes center-of-mass trajectories for molecules or coarse-grained units.
 
+Current continuous-coordinate behavior highlights:
+
+- Step 2 normally uses the first input frame as the continuity reference
+- optional `Fix 1st Frame` repairs molecules already split in that first frame before unwrapping
+- `Fix 1st Frame` has its own Step 2 `PSF Pattern`, `Target Selection`, `VMD Path`, and `Grouping Unit` inputs
+- when enabled, the first-frame repair shifts are applied consistently to every frame before normal unwrapping
+
 Current COM behavior highlights:
 
 - Step 3 uses its own `PSF Pattern`, `Target Selection`, and `VMD Path`
