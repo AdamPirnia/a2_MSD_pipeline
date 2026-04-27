@@ -573,10 +573,10 @@ This module generates scripts for time-correlation analysis from numeric array f
 ## Common Parameters
 
 - `Base Directory`: root folder for correlation inputs and outputs
-- `Number of DCDs`: total number of indexed files to process
+- `Num. Corr. Functions`: total number of indexed correlation functions to calculate
 - `Number of Particles`: retained for consistency with other modules
 - `Common Terms`: two optional shared replacement fields for `*` and `**` in file patterns
-- `Max Workers`: retained for workflow consistency; current correlation generation runs serially
+- `Max Workers`: maximum independent correlation functions to calculate at the same time
 
 ## Correlation Function Parameters
 

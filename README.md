@@ -174,6 +174,7 @@ Current behavior highlights:
 - the reported correlation function is written as `C(t)/C(0)`
 - the separate variance output stores `C(0) * Coefficient^2`
 - `Step (between frames)` determines the unit of the horizontal axis, such as time
+- `Max Workers` can calculate multiple indexed correlation functions in parallel
 
 Typical outputs and units:
 
