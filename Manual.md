@@ -1074,16 +1074,10 @@ The charge-coordinate, dipole-position, and dipole-vector patterns must resolve 
 
 ### Charge-Dipole `k` Parameters
 
-The charge-dipole tab also uses three `k` tiers, but the meaning of the resolution or stride fields depends on the selected mode.
+The charge-dipole tab uses the same three `k`-resolution tiers in both directional and isotropic modes.
 
-In `Directional` mode:
-
-- `Stride 1`, `Stride 2`, `Stride 3` are integer down-sampling factors for explicit reciprocal vectors
-
-In `Isotropic` mode:
-
-- `Stride 1`, `Stride 2`, `Stride 3` act as `k` resolutions, not integer list strides
-- each value is the minimum spacing kept between neighboring isotropic `|k|` values within that tier
+- `Resolution: res. 1`, `res. 2`, `res. 3` are the minimum spacing kept between neighboring `|k|` values within the first, second, and third tiers.
+- Directional mode keeps all reciprocal-vector directions whose `|k|` value survives that tier's resolution filter.
 
 ### Charge-Dipole Directional Mode
 
@@ -1121,7 +1115,7 @@ Output format:
 
 The output begins with `#` header lines, so NumPy text loaders skip them by default. The header records the charge/dipole input paths, strides, box lengths, `k` tiers, cutoffs, cell sizes, frame/trajectory counts, and column labels.
 
-In this mode, the `Stride` fields are `k`-resolution settings, and `Shell Width` is not used by the calculation.
+In this mode, `Shell Width` is not used by the calculation.
 
 ### Charge-Dipole Cutoffs And Extra Output
 
