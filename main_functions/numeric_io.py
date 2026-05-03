@@ -141,6 +141,7 @@ def save_numeric_array(
     default_precision: str,
     default_decimals: int | None = None,
     delimiter: str = " ",
+    header: str | None = None,
 ) -> dict[str, Any]:
     io_spec = normalize_io_spec(
         spec,
@@ -157,6 +158,13 @@ def save_numeric_array(
         with open(output_file, "wb") as fh:
             np.save(fh, array, allow_pickle=False)
     else:
-        np.savetxt(output_file, array, fmt=text_format_for_spec(io_spec), delimiter=delimiter)
+        np.savetxt(
+            output_file,
+            array,
+            fmt=text_format_for_spec(io_spec),
+            delimiter=delimiter,
+            header="" if header is None else str(header),
+            comments="# ",
+        )
 
     return io_spec

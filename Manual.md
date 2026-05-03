@@ -436,7 +436,7 @@ Use these fields:
 - `Coordinates Pattern`: full input `path + filename + extension` pattern for coordinate files
 - `All neutral particles`: check only if every net charge per selected group is zero
 - `COM Patterns`: full input `path + filename + extension` pattern for center-of-mass files used when `All neutral particles` is not checked
-- `Grouping Unit`: grouping used to define each individual dipole, currently `residue`, `chain`, or `segname`
+- `Grouping Unit`: grouping used to define each individual dipole: `residue`, `chain`, `segname`, or `all`
 - `Dipole Vectors Pattern`: full output `path + filename + extension` pattern for dipole-vector files
 - `Magnitudes Pattern`: optional full output `path + filename + extension` pattern for dipole-magnitude files
 - checkbox next to `Magnitudes Pattern`: enables or disables dipole-magnitude calculation and saving
@@ -461,6 +461,7 @@ How individual molecules are distinguished:
 - this workflow groups atoms using `Grouping Unit`
 - if `Grouping Unit = residue`, one dipole is computed for each residue inside the final selection
 - if `Grouping Unit = chain`, one dipole is computed for each chain inside the final selection
+- if `Grouping Unit = all`, one dipole is computed from all selected/input coordinates
 - groups do not need to have the same number of atoms
 - selections such as `same residue as ...` are interpreted by VMD before dipoles are computed
 
@@ -477,6 +478,7 @@ Use these fields:
 
 - `DCD Pattern`: full input `path + filename + extension` pattern for collective dipole analysis
 - `Output Pattern`: full output `path + filename + extension` pattern for the collective dipole result
+- `Options`: enables or disables parallel VMD execution and optional pbctools coordinate wrapping before collective dipoles are measured
 
 What it does:
 
@@ -1112,8 +1114,12 @@ This mode writes one isotropic table directly.
 Output format:
 
 - column 1: `|k|`
-- column 2: total isotropic value normalized by the total number of dipoles
-- column 3: isotropic value normalized by the number of dipoles that lie inside the cutoff
+- column 2: not-normalized charge-dipole structure factor, `Sqp(k)`
+- column 3: average number of dipoles included by `CO-1`
+- column 4: average number of dipoles included by `CO-2`
+- column 5: average number of dipoles included by `CO-3`
+
+The output begins with `#` header lines, so NumPy text loaders skip them by default. The header records the charge/dipole input paths, strides, box lengths, `k` tiers, cutoffs, cell sizes, frame/trajectory counts, and column labels.
 
 In this mode, the `Stride` fields are `k`-resolution settings, and `Shell Width` is not used by the calculation.
 

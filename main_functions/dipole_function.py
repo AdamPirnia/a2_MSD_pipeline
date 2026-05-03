@@ -72,7 +72,7 @@ def _load_array_with_fallback(input_file, dtype=np.float64, io_spec=None):
 
 def _extract_selection_metadata(baseDir, psf_pattern, file_index, target_selection, grouping_unit, vmd_path, common_term=""):
     """Use VMD to resolve selected atoms, charges, masses, and grouping metadata for dipole calculations."""
-    if grouping_unit not in {"residue", "chain", "segname"}:
+    if grouping_unit not in {"residue", "chain", "segname", "all"}:
         raise ValueError(f"Unsupported grouping unit: {grouping_unit}")
     if not str(vmd_path or "").strip():
         raise ValueError("VMD path is required for individual dipole metadata extraction")
@@ -89,10 +89,19 @@ def _extract_selection_metadata(baseDir, psf_pattern, file_index, target_selecti
     if not os.path.exists(psf_full):
         raise FileNotFoundError(f"PSF file not found: {psf_full}")
 
+    if grouping_unit == "all":
+        group_tcl = """set groups [list]
+foreach atom_index [$sel get index] {
+    lappend groups all
+}
+"""
+    else:
+        group_tcl = f"set groups [$sel get {grouping_unit}]\n"
+
     script_content = f"""set PSF "{_tcl_quote(psf_full)}"
 set molid [mol new $PSF type psf waitfor all]
 set sel [atomselect $molid "{_tcl_quote(target_selection)}"]
-set groups [$sel get {grouping_unit}]
+{group_tcl.rstrip()}
 set masses [$sel get mass]
 set charges [$sel get charge]
 puts "__META_BEGIN__"
@@ -427,7 +436,8 @@ def dipole_functions(baseDir, coords_pattern, com_pattern, psf_pattern, target_s
     vmd_path : str
         Path to the VMD executable used to resolve PSF metadata.
     grouping_unit : str
-        Grouping unit used to define individual dipoles. One of residue, chain, segname.
+        Grouping unit used to define individual dipoles. One of residue, chain, segname, all.
+        Use all to compute one dipole from every selected/input coordinate.
     dipole_unit : str
         Output dipole unit. One of Debye or e·Å.
     all_neutral : bool
@@ -480,8 +490,8 @@ def dipole_functions(baseDir, coords_pattern, com_pattern, psf_pattern, target_s
     is_valid, error_msg = validate_path_pattern(output_pattern)
     if not is_valid:
         raise ValueError(f"Invalid output pattern: {error_msg}")
-    if grouping_unit not in {"residue", "chain", "segname"}:
-        raise ValueError("grouping_unit must be one of: residue, chain, segname")
+    if grouping_unit not in {"residue", "chain", "segname", "all"}:
+        raise ValueError("grouping_unit must be one of: residue, chain, segname, all")
     if dipole_unit not in {"Debye", "e·Å"}:
         raise ValueError("dipole_unit must be one of: Debye, e·Å")
     if not str(target_selection or "").strip():

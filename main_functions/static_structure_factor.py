@@ -877,6 +877,7 @@ def _write_single_trajectory_output(
     default_precision: str,
     default_decimals: int | None = None,
     delimiter: str = " ",
+    header: str | None = None,
 ) -> str:
     report_path = _single_trajectory_report_path(output_path, trajectory_index)
     save_numeric_array(
@@ -887,8 +888,81 @@ def _write_single_trajectory_output(
         default_precision=default_precision,
         default_decimals=default_decimals,
         delimiter=delimiter,
+        header=header,
     )
     return report_path
+
+
+def _format_header_value(value: Any) -> str:
+    if value is None:
+        return "none"
+    if isinstance(value, float):
+        return f"{value:.15g}"
+    return str(value)
+
+
+def _charge_dipole_isotropic_output_header(
+    *,
+    charge_values_path: str,
+    charge_coords_pattern: str,
+    charge_coords_stride: int,
+    dipole_positions_pattern: str,
+    dipole_positions_stride: int,
+    dipole_vectors_pattern: str,
+    dipole_vectors_stride: int,
+    k_max_primary: float,
+    k_max_secondary: float,
+    k_max_tertiary: float,
+    k_stride_primary: float,
+    k_stride_secondary: float,
+    k_stride_tertiary: float,
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    cutoff_primary: float | None,
+    cutoff_secondary: float | None,
+    cutoff_tertiary: float | None,
+    cell_size_primary: float | None,
+    cell_size_secondary: float | None,
+    cell_size_tertiary: float | None,
+    charge_count: int,
+    dipole_count: int | str,
+    frame_count: int,
+    trajectory_count: int,
+    delete_residue_index: int | None,
+    frame_window: tuple[int, int | None, int] | None,
+    trajectory_selection: str | None,
+) -> str:
+    if frame_window is None:
+        frame_window_text = "full trajectory"
+    else:
+        frame_window_text = f"range({frame_window[0]}, {frame_window[1]}, {frame_window[2]})"
+    lines = [
+        "This file contains the magnitude of wave vectors, not normalized (by the number of dipoles) charge dipole structure factor, and number of dipoles in each cutoff value averaged over trajectories.",
+        "k      Sqp(k)      Num. m (CO-1)      Num. m (CO-2)      Num. m (CO-3)",
+        "######################",
+        "Calculation mode: isotropic charge-dipole structure factor",
+        f"Charge values path: {charge_values_path}",
+        f"Charge coordinates path: {charge_coords_pattern}",
+        f"Charge coordinates stride: {int(charge_coords_stride)}",
+        f"Dipole positions path: {dipole_positions_pattern}",
+        f"Dipole positions stride: {int(dipole_positions_stride)}",
+        f"Dipole vectors path: {dipole_vectors_pattern}",
+        f"Dipole vectors stride: {int(dipole_vectors_stride)}",
+        f"Box lengths: Lx={_format_header_value(float(Lx))}, Ly={_format_header_value(float(Ly))}, Lz={_format_header_value(float(Lz))}",
+        f"k max values: K1={_format_header_value(float(k_max_primary))}, K2={_format_header_value(float(k_max_secondary))}, K3={_format_header_value(float(k_max_tertiary))}",
+        f"k resolutions: res1={_format_header_value(float(k_stride_primary))}, res2={_format_header_value(float(k_stride_secondary))}, res3={_format_header_value(float(k_stride_tertiary))}",
+        f"Cutoffs: CO-1={_format_header_value(cutoff_primary)}, CO-2={_format_header_value(cutoff_secondary)}, CO-3={_format_header_value(cutoff_tertiary)}",
+        f"Cell sizes: CS-1={_format_header_value(cell_size_primary)}, CS-2={_format_header_value(cell_size_secondary)}, CS-3={_format_header_value(cell_size_tertiary)}",
+        f"Charge sites: {int(charge_count)}",
+        f"Dipoles per frame: {dipole_count}",
+        f"Total frames averaged: {int(frame_count)}",
+        f"Trajectories averaged: {int(trajectory_count)}",
+        f"Delete residue index: {_format_header_value(delete_residue_index)}",
+        f"Trajectory desired length: {frame_window_text}",
+        f"Trajectory selection: {_format_header_value(trajectory_selection)}",
+    ]
+    return "\n".join(lines)
 
 
 def _read_total_frames_from_status_log(path: str) -> int:
@@ -1587,7 +1661,6 @@ def charge_dipole_structure_factor_isotropic(
 
     cutoff_sq = None if cutoff is None else float(cutoff) ** 2
     out_total = np.zeros(k_vals_use.shape[0], dtype=np.float64)
-    out_cutoff = np.zeros(k_vals_use.shape[0], dtype=np.float64)
     frame_count = int(rq.shape[0])
     frame_chunk_use = _resolve_chunk_length(frame_chunk, frame_count)
     charge_chunk_use = _resolve_chunk_length(charge_chunk, int(rq.shape[1]))
@@ -1604,9 +1677,7 @@ def charge_dipole_structure_factor_isotropic(
             rq_frame = np.asarray(rq[frame_index], dtype=np.float64)
             rp_frame = np.asarray(rp[frame_index], dtype=np.float64)
             ehat_frame = np.asarray(ehat[frame_index], dtype=np.float64)
-            used_dipoles_mask = np.zeros(dipole_count, dtype=bool)
-            if cutoff_sq is None:
-                used_dipoles_mask[:] = True
+            used_dipoles_mask = None if cutoff_sq is None else np.zeros(dipole_count, dtype=bool)
             frame_out = np.zeros(k_vals_use.shape[0], dtype=np.float64)
 
             wrapped_rp_frame = None
@@ -1652,7 +1723,8 @@ def charge_dipole_structure_factor_isotropic(
                         keep = np.sum(dr_all * dr_all, axis=1) <= cutoff_sq
                         if not np.any(keep):
                             continue
-                        used_dipoles_mask[candidate_indices[keep]] = True
+                        if used_dipoles_mask is not None:
+                            used_dipoles_mask[candidate_indices[keep]] = True
                         dr_candidates_all = dr_all[keep]
                         ehat_candidates_all = ehat_candidates_all[keep]
                     else:
@@ -1663,7 +1735,8 @@ def charge_dipole_structure_factor_isotropic(
                             keep = np.sum(dr_all * dr_all, axis=1) <= cutoff_sq
                             if not np.any(keep):
                                 continue
-                            used_dipoles_mask[keep] = True
+                            if used_dipoles_mask is not None:
+                                used_dipoles_mask[keep] = True
                             dr_candidates_all = dr_all[keep]
                             ehat_candidates_all = ehat_frame[keep]
                         else:
@@ -1688,11 +1761,9 @@ def charge_dipole_structure_factor_isotropic(
                             k1 = min(int(k_vals_use.shape[0]), k0 + k_chunk_use)
                             kr = np.outer(k_vals_use[k0:k1], r)
                             frame_out[k0:k1] += np.sum(weights[None, :] * _spherical_bessel_j1(kr), axis=1)
-            last_used_dipole_count = int(np.count_nonzero(used_dipoles_mask))
+            last_used_dipole_count = dipole_count if used_dipoles_mask is None else int(np.count_nonzero(used_dipoles_mask))
             frame_dipole_counts[frame_index] = last_used_dipole_count
-            out_total += frame_out / float(dipole_count)
-            if last_used_dipole_count > 0:
-                out_cutoff += frame_out / float(last_used_dipole_count)
+            out_total += frame_out
             if status_logger is not None:
                 status_logger.charge_dipole(
                     frame_index + 1,
@@ -1702,14 +1773,12 @@ def charge_dipole_structure_factor_isotropic(
                 )
 
     out_total *= -1.0
-    out_cutoff *= -1.0
     if normalize_by_frames:
         out_total /= float(frame_count)
-        out_cutoff /= float(frame_count)
     if status_logger is not None:
         status_logger.charge_dipole(frame_count, int(z.shape[0]), int(k_vals_use.shape[0]), last_used_dipole_count, force=True)
 
-    return out_total.astype(dtype, copy=False), out_cutoff.astype(dtype, copy=False), frame_dipole_counts
+    return out_total.astype(dtype, copy=False), frame_dipole_counts
 
 
 def charge_dipole_structure_factor_directional(
@@ -2361,6 +2430,7 @@ def compute_charge_dipole_structure_factor_from_files(
 def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, Any]:
     (
         file_index,
+        charge_values_path,
         rq_file,
         rp_file,
         mu_file,
@@ -2478,23 +2548,24 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
         trajectory_status_logger = _StatusLogger(status_log_path, time.time(), trajectory_index=int(file_index))
         trajectory_status_logger.trajectory_total_frames(frame_count)
         isotropic_values_total = np.zeros(k_magnitudes_array.shape[0], dtype=np.float64)
-        isotropic_values_cutoff = np.zeros(k_magnitudes_array.shape[0], dtype=np.float64)
         frame_dipole_counts = np.zeros(frame_count, dtype=np.int64)
+        tier_count_sums = np.zeros(3, dtype=np.float64)
+        tier_count_frames = np.zeros(3, dtype=np.int64)
         tier_masks = _three_tier_masks_from_magnitudes(
             k_magnitudes_array,
             k_max_primary,
             k_max_secondary,
             k_max_tertiary,
         )
-        for mask, tier_cutoff, tier_cell_size in zip(
+        for tier_index, (mask, tier_cutoff, tier_cell_size) in enumerate(zip(
             tier_masks,
             (cutoff_primary, cutoff_secondary, cutoff_tertiary),
             (cell_size_primary, cell_size_secondary, cell_size_tertiary),
             strict=False,
-        ):
+        )):
             if not np.any(mask):
                 continue
-            tier_total, tier_cutoff_values, tier_counts = charge_dipole_structure_factor_isotropic(
+            tier_total, tier_counts = charge_dipole_structure_factor_isotropic(
                 k_magnitudes_array[mask],
                 charge_positions,
                 charge_values_array,
@@ -2511,8 +2582,49 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
                 status_logger=trajectory_status_logger,
             )
             isotropic_values_total[mask] = tier_total
-            isotropic_values_cutoff[mask] = tier_cutoff_values
+            tier_count_sums[tier_index] += float(np.sum(tier_counts))
+            tier_count_frames[tier_index] += int(np.asarray(tier_counts).shape[0])
             frame_dipole_counts = np.maximum(frame_dipole_counts, np.asarray(tier_counts, dtype=np.int64))
+
+        tier_count_averages = np.full(3, np.nan, dtype=np.float64)
+        np.divide(
+            tier_count_sums,
+            tier_count_frames,
+            out=tier_count_averages,
+            where=tier_count_frames > 0,
+        )
+        tier_count_columns = np.tile(tier_count_averages, (k_magnitudes_array.shape[0], 1))
+        report_header = _charge_dipole_isotropic_output_header(
+            charge_values_path=str(charge_values_path),
+            charge_coords_pattern=str(rq_file),
+            charge_coords_stride=int(charge_coords_stride),
+            dipole_positions_pattern=str(rp_file),
+            dipole_positions_stride=int(dipole_positions_stride),
+            dipole_vectors_pattern=str(mu_file),
+            dipole_vectors_stride=int(dipole_vectors_stride),
+            k_max_primary=float(k_max_primary),
+            k_max_secondary=float(k_max_secondary),
+            k_max_tertiary=float(k_max_tertiary),
+            k_stride_primary=float(k_stride_primary),
+            k_stride_secondary=float(k_stride_secondary),
+            k_stride_tertiary=float(k_stride_tertiary),
+            Lx=float(box_array[0]),
+            Ly=float(box_array[1]),
+            Lz=float(box_array[2]),
+            cutoff_primary=cutoff_primary,
+            cutoff_secondary=cutoff_secondary,
+            cutoff_tertiary=cutoff_tertiary,
+            cell_size_primary=cell_size_primary,
+            cell_size_secondary=cell_size_secondary,
+            cell_size_tertiary=cell_size_tertiary,
+            charge_count=int(charge_values_array.shape[0]),
+            dipole_count=int(dipole_positions.shape[1]),
+            frame_count=int(frame_count),
+            trajectory_count=1,
+            delete_residue_index=delete_residue_index,
+            frame_window=frame_window,
+            trajectory_selection=str(file_index),
+        )
 
         report_path = _write_single_trajectory_output(
             isotropic_output_path,
@@ -2521,12 +2633,13 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
                 (
                     k_magnitudes_array,
                     np.asarray(isotropic_values_total, dtype=np.float64) / float(frame_count),
-                    np.asarray(isotropic_values_cutoff, dtype=np.float64) / float(frame_count),
+                    tier_count_columns,
                 )
             ),
             isotropic_output_io_spec,
             default_mode="text",
             default_precision="double",
+            header=report_header,
         )
         elapsed_s = float(time.time() - trajectory_start)
         print(f"  completed isotropic charge-dipole file set {file_index} in {elapsed_s:.2f} s", flush=True)
@@ -2538,6 +2651,8 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
             "frame_count": int(frame_count),
             "dipole_count": int(dipole_positions.shape[1]),
             "dipoles_in_cutoff": np.asarray(frame_dipole_counts, dtype=np.int64),
+            "dipoles_in_cutoff_tier_sums": np.asarray(tier_count_sums, dtype=np.float64),
+            "dipoles_in_cutoff_tier_frames": np.asarray(tier_count_frames, dtype=np.int64),
             "elapsed_s": elapsed_s,
             "output_file": report_path,
             "status_log_file": status_log_path,
@@ -2692,7 +2807,8 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
 
     charge_values = _load_charge_values(charge_values_file, charge_values_io_spec, delete_residue_index)
     sqp_sum_total = np.zeros(k_magnitudes.shape[0], dtype=np.float64)
-    sqp_sum_cutoff = np.zeros(k_magnitudes.shape[0], dtype=np.float64)
+    dipoles_in_cutoff_tier_sums = np.zeros(3, dtype=np.float64)
+    dipoles_in_cutoff_tier_frames = np.zeros(3, dtype=np.int64)
     total_frames = 0
     per_file_stats: list[dict[str, Any]] = []
     isotropic_single_trajectory_reports: list[str] = []
@@ -2752,6 +2868,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     task_args = [
         (
             file_index,
+            charge_values_path,
             rq_file,
             rp_file,
             mu_file,
@@ -2827,8 +2944,8 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         trajectory_output = np.asarray(trajectory_output, dtype=np.float64)
         if trajectory_output.ndim == 1:
             trajectory_output = trajectory_output.reshape(1, -1)
-        if trajectory_output.shape[1] < 3:
-            raise ValueError(f"Per-trajectory Sqp(k) output must contain at least 3 columns: {report_path}")
+        if trajectory_output.shape[1] < 2:
+            raise ValueError(f"Per-trajectory Sqp(k) output must contain at least 2 columns: {report_path}")
         if trajectory_output.shape[0] != k_magnitudes.shape[0] or not np.allclose(
             trajectory_output[:, 0],
             k_magnitudes,
@@ -2838,7 +2955,8 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
             raise ValueError(f"Per-trajectory k values do not match the current run: {report_path}")
 
         sqp_sum_total += trajectory_output[:, 1] * float(frame_count)
-        sqp_sum_cutoff += trajectory_output[:, 2] * float(frame_count)
+        dipoles_in_cutoff_tier_sums += np.asarray(item["dipoles_in_cutoff_tier_sums"], dtype=np.float64)
+        dipoles_in_cutoff_tier_frames += np.asarray(item["dipoles_in_cutoff_tier_frames"], dtype=np.int64)
         total_frames += int(frame_count)
         isotropic_single_trajectory_reports.append(report_path)
         dipoles_in_cutoff_all.append(np.asarray(item["dipoles_in_cutoff"], dtype=np.int64))
@@ -2850,6 +2968,8 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
                 "frame_count": int(frame_count),
                 "dipole_count": int(item["dipole_count"]),
                 "dipoles_in_cutoff": np.asarray(item["dipoles_in_cutoff"], dtype=np.int64),
+                "dipoles_in_cutoff_tier_sums": np.asarray(item["dipoles_in_cutoff_tier_sums"], dtype=np.float64),
+                "dipoles_in_cutoff_tier_frames": np.asarray(item["dipoles_in_cutoff_tier_frames"], dtype=np.int64),
                 "elapsed_s": float(item["elapsed_s"]),
                 "isotropic_output_file": report_path,
                 "status_log_file": status_path,
@@ -2860,15 +2980,60 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         raise ValueError("No frames were accumulated for the charge-dipole structure-factor calculation.")
 
     isotropic_average_total = sqp_sum_total / float(total_frames)
-    isotropic_average_cutoff = sqp_sum_cutoff / float(total_frames)
+    cutoff_count_averages = np.full(3, np.nan, dtype=np.float64)
+    np.divide(
+        dipoles_in_cutoff_tier_sums,
+        dipoles_in_cutoff_tier_frames,
+        out=cutoff_count_averages,
+        where=dipoles_in_cutoff_tier_frames > 0,
+    )
 
-    isotropic_output_array = np.column_stack((k_magnitudes, isotropic_average_total, isotropic_average_cutoff))
+    cutoff_count_columns = np.tile(cutoff_count_averages, (k_magnitudes.shape[0], 1))
+    isotropic_output_array = np.column_stack((k_magnitudes, isotropic_average_total, cutoff_count_columns))
+    dipole_counts = sorted({int(item["dipole_count"]) for item in per_file_stats})
+    dipole_count_header: int | str
+    if len(dipole_counts) == 1:
+        dipole_count_header = dipole_counts[0]
+    else:
+        dipole_count_header = ", ".join(str(value) for value in dipole_counts)
+    output_header = _charge_dipole_isotropic_output_header(
+        charge_values_path=charge_values_path,
+        charge_coords_pattern=charge_coords_pattern,
+        charge_coords_stride=int(charge_coords_stride),
+        dipole_positions_pattern=dipole_positions_pattern,
+        dipole_positions_stride=int(dipole_positions_stride),
+        dipole_vectors_pattern=dipole_vectors_pattern,
+        dipole_vectors_stride=int(dipole_vectors_stride),
+        k_max_primary=float(k_max_primary),
+        k_max_secondary=float(k_max_secondary),
+        k_max_tertiary=float(k_max_tertiary),
+        k_stride_primary=float(k_stride_primary),
+        k_stride_secondary=float(k_stride_secondary),
+        k_stride_tertiary=float(k_stride_tertiary),
+        Lx=float(Lx),
+        Ly=float(Ly),
+        Lz=float(Lz),
+        cutoff_primary=cutoff_primary,
+        cutoff_secondary=cutoff_secondary,
+        cutoff_tertiary=cutoff_tertiary,
+        cell_size_primary=cell_size_primary,
+        cell_size_secondary=cell_size_secondary,
+        cell_size_tertiary=cell_size_tertiary,
+        charge_count=int(charge_values.shape[0]),
+        dipole_count=dipole_count_header,
+        frame_count=int(total_frames),
+        trajectory_count=len(per_file_stats),
+        delete_residue_index=delete_residue_index,
+        frame_window=frame_window,
+        trajectory_selection=trajectory_selection,
+    )
     save_numeric_array(
         isotropic_output_path,
         isotropic_output_array,
         isotropic_output_io_spec,
         default_mode="text",
         default_precision="double",
+        header=output_header,
     )
     dipoles_in_cutoff_path = _write_dipoles_in_cutoff(
         isotropic_output_path,
@@ -2887,7 +3052,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         "isotropic_k_count": int(k_magnitudes.shape[0]),
         "k_magnitudes": k_magnitudes,
         "isotropic_values": isotropic_average_total,
-        "isotropic_values_cutoff": isotropic_average_cutoff,
+        "dipoles_in_cutoff_averages": cutoff_count_averages,
         "total_frames": int(total_frames),
         "isotropic_output_file": isotropic_output_path,
         "dipoles_in_cutoff_file": dipoles_in_cutoff_path,

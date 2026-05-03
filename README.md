@@ -112,7 +112,7 @@ Current behavior highlights:
 - velocity extraction is controlled by `Target Selection` together with `Grouping Unit`
 - velocity extraction does not use a module-level particle-count field
 - dipole calculations share `PSF Pattern`, `Target Selection`, `VMD Path`, `Stride`, and `Dipole Unit`
-- individual dipole calculations add `Grouping Unit`, `All neutral particles`, and `COM Patterns` on top of those shared fields
+- individual dipole calculations add `Grouping Unit`, `All neutral particles`, and `COM Patterns` on top of those shared fields; `Grouping Unit = all` computes one dipole from the full selected/input coordinate set
 - if `All neutral particles` is unchecked, individual dipoles use one COM vector per resolved group and frame
 - stride control is available for velocity extraction and individual dipole calculations
 - individual dipole magnitude output is optional
@@ -123,6 +123,7 @@ Typical outputs and units:
 - COM velocities: same velocity unit as the input velocity trajectory
 - individual dipole vectors: selected `Dipole Unit` (`Debye` or `e·Å`)
 - individual dipole magnitudes: selected `Dipole Unit`
+- collective dipole calculations can run VMD in parallel and can optionally wrap coordinates before measuring dipoles
 - collective dipole vector components: selected `Dipole Unit`
 - collective dipole magnitude: selected `Dipole Unit`
 

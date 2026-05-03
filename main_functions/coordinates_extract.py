@@ -832,8 +832,10 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
     script_path = f"writenCodes/{tcl_filename}"
     log_path = f"logs/log_{index}.log"
     
-    # Build VMD command - ensure proper quoting for paths with spaces
-    command = [vmd_path, "-dispdev", "text", "-nt", "1", "-e", script_path]
+    # Build VMD command - ensure proper quoting for paths with spaces.
+    # Some VMD builds do not support "-nt" and treat the following value as an
+    # input molecule filename, so keep the batch invocation to portable flags.
+    command = [vmd_path, "-dispdev", "text", "-e", script_path]
     
     print(f"Command: {' '.join(command)}")
     print(f"Script path: {script_path}")
@@ -849,19 +851,39 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
             timeout=None  # No timeout for large trajectories
         )
         
+        def write_vmd_log(extra_error=None):
+            with open(log_path, 'w') as log_file:
+                log_file.write(f"Command: {' '.join(command)}\n")
+                log_file.write(f"Return code: {process.returncode}\n")
+                if extra_error:
+                    log_file.write(f"Detected error: {extra_error}\n")
+                log_file.write(f"STDOUT:\n{process.stdout}\n")
+                log_file.write(f"STDERR:\n{process.stderr}\n")
+
         # Save log file
-        with open(log_path, 'w') as log_file:
-            log_file.write(f"Command: {' '.join(command)}\n")
-            log_file.write(f"Return code: {process.returncode}\n")
-            log_file.write(f"STDOUT:\n{process.stdout}\n")
-            log_file.write(f"STDERR:\n{process.stderr}\n")
-        
+        write_vmd_log()
+
+        tcl_errors = [
+            line.strip()
+            for line in (process.stdout + "\n" + process.stderr).splitlines()
+            if line.strip().startswith("ERROR:")
+        ]
+        if tcl_errors:
+            error_msg = "\n".join(tcl_errors)
+            write_vmd_log(error_msg)
+            return False, process.stdout, error_msg
+
         success = process.returncode == 0
         if success:
             output_file = os.path.join(baseDir, expand_path_pattern(output_pattern, common_term, index))
             normalized_output = _normalize_output_io_spec(output_io_spec)
             if normalized_output["mode"] == "binary":
-                _finalize_binary_coordinate_output(output_file, normalized_output)
+                try:
+                    _finalize_binary_coordinate_output(output_file, normalized_output)
+                except Exception as e:
+                    error_msg = f"Post-processing VMD coordinate output failed: {e}"
+                    write_vmd_log(error_msg)
+                    return False, process.stdout, error_msg
         return success, process.stdout, process.stderr
         
     except subprocess.TimeoutExpired:

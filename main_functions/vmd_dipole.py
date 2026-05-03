@@ -10,7 +10,8 @@ except ImportError:
     from numeric_io import load_numeric_array, save_numeric_array
 
 def vmd_dipole_collective(baseDir, psf, dcd, num_dcd, target, vmd, stride=1, dipole_unit="e·Å",
-                          max_workers=None, dcd_indices=None, neutral=False, output_pattern=None, output_io_spec=None):
+                          max_workers=None, dcd_indices=None, neutral=False, output_pattern=None,
+                          output_io_spec=None, wrap_settings=None):
     """
     Calculates collective dipole moments from a series of DCD trajectories using VMD in parallel.
     
@@ -63,6 +64,9 @@ def vmd_dipole_collective(baseDir, psf, dcd, num_dcd, target, vmd, stride=1, dip
     neutral : bool, optional
         If True, use a geometry-centered dipole evaluation because no COM correction is
         needed for a neutral selection. If False, use mass-centered dipoles.
+    wrap_settings : dict, optional
+        pbctools wrapping settings. If enabled, each frame is wrapped before measuring
+        the collective dipole.
     
     Side Effects
     ------------
@@ -145,10 +149,11 @@ def vmd_dipole_collective(baseDir, psf, dcd, num_dcd, target, vmd, stride=1, dip
     print(f"Neutral dipole handling: {'enabled' if neutral else 'disabled'}")
     print(f"Stride: {stride}")
     print(f"Dipole unit: {dipole_unit}")
+    print(f"Wrap enabled: {bool((wrap_settings or {}).get('enabled'))}")
     
     # Generate all TCL scripts first with pattern validation
     for i in dcd_list:
-        success = _write_dipole_tcl_script(i, baseDir, psf, dcd, target, stride, dipole_unit, neutral, output_pattern)
+        success = _write_dipole_tcl_script(i, baseDir, psf, dcd, target, stride, dipole_unit, neutral, output_pattern, wrap_settings)
         if not success:
             print(f"ERROR: Failed to generate TCL script for dipole chunk {i} due to pattern validation failure.")
             print("Please fix the corrupted patterns in your GUI input fields and try again.")
@@ -199,7 +204,8 @@ def vmd_dipole_collective(baseDir, psf, dcd, num_dcd, target, vmd, stride=1, dip
     return results
 
 
-def _write_dipole_tcl_script(i, baseDir, psf, dcd, target, stride=1, dipole_unit="e·Å", neutral=False, output_pattern=None):
+def _write_dipole_tcl_script(i, baseDir, psf, dcd, target, stride=1, dipole_unit="e·Å", neutral=False,
+                             output_pattern=None, wrap_settings=None):
     """Write optimized TCL script for collective dipole moment calculation."""
     
     # Validate patterns to ensure they match user input expectations
@@ -263,6 +269,7 @@ def _write_dipole_tcl_script(i, baseDir, psf, dcd, target, stride=1, dipole_unit
     dipole_center_option = "-geocenter" if neutral else "-masscenter"
     dipole_unit_option = " -debye" if dipole_unit == "Debye" else ""
     header_unit = "Debye" if dipole_unit == "Debye" else "e·Å"
+    wrap_block, wrap_frame_block = _build_wrap_tcl_blocks(wrap_settings, target)
     
     if not os.path.exists(psf_full_path):
         raise FileNotFoundError(_format_missing_file_message("PSF", psf_full_path))
@@ -288,6 +295,7 @@ puts "Loading DCD: $DCD"
 
 set molid [mol load psf $PSF dcd $DCD]
 puts "Molecule loaded with ID: $molid"
+{wrap_block}
 
 # Get trajectory info
 set nframes [molinfo $molid get numframes]
@@ -312,6 +320,8 @@ puts $outfile "# Format: frame dipole_x dipole_y dipole_z magnitude_{header_unit
 
 # Process each frame efficiently
 for {{set frame 0}} {{$frame < $nframes}} {{incr frame {int(stride)}}} {{
+    animate goto $frame
+{wrap_frame_block}
     # Update selection to current frame
     $sel frame $frame
     
@@ -347,6 +357,52 @@ exit
 """)
     
     return True
+
+
+def _build_wrap_tcl_blocks(wrap_settings, target_selection):
+    wrap_settings = wrap_settings or {}
+    if not bool(wrap_settings.get("enabled")):
+        return "", ""
+
+    atomselection = str(wrap_settings.get("atomselection") or "").strip() or target_selection or "all"
+    wrap_shape = wrap_settings.get("shape") or "parallelepiped"
+    wrap_compound = wrap_settings.get("compound")
+    wrap_center = wrap_settings.get("center") or "unitcell"
+    wrap_option_flags = wrap_settings.get("options", {})
+
+    setup_lines = [
+        "",
+        "# Load pbctools and configure per-frame wrapping before dipole calculation",
+        "if {[catch {package require pbctools} pbctools_err]} {",
+        '    puts "ERROR: Failed to load pbctools package: $pbctools_err"',
+        "    exit 1",
+        "}",
+        "set wrap_args [list -molid $molid -now]",
+    ]
+    if wrap_shape in {"parallelepiped", "orthorhombic"}:
+        setup_lines.append(f"lappend wrap_args -{wrap_shape}")
+    if wrap_option_flags.get("sel"):
+        setup_lines.append(f'lappend wrap_args -sel "{_tcl_quote(atomselection)}"')
+    if wrap_compound in {"res", "segid", "chain", "fragment"}:
+        setup_lines.append(f"lappend wrap_args -compound {wrap_compound}")
+    if wrap_option_flags.get("compoundref"):
+        setup_lines.append(f'lappend wrap_args -compoundref "{_tcl_quote(atomselection)}"')
+    if wrap_center in {"origin", "unitcell", "com", "bb"}:
+        setup_lines.append(f"lappend wrap_args -center {wrap_center}")
+    if wrap_option_flags.get("centersel"):
+        setup_lines.append(f'lappend wrap_args -centersel "{_tcl_quote(atomselection)}"')
+    if wrap_option_flags.get("verbose"):
+        setup_lines.append("lappend wrap_args -verbose")
+    if wrap_option_flags.get("draw"):
+        setup_lines.append("lappend wrap_args -draw")
+    setup_lines.append('puts "Configured per-frame wrapping with: pbc wrap [join $wrap_args { }]"')
+
+    frame_block = """    if {[catch {eval pbc wrap $wrap_args} wrap_err]} {
+        puts "ERROR: pbc wrap failed at frame $frame: $wrap_err"
+        exit 1
+    }
+"""
+    return "\n".join(setup_lines), frame_block.rstrip()
 
 
 def _run_vmd_dipole_script(index, vmd_path, baseDir="", output_pattern=None, output_io_spec=None):
