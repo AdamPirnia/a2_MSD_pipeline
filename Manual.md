@@ -1056,10 +1056,14 @@ This tab computes charge-dipole structure factors from:
 
 The charge-coordinate, dipole-position, and dipole-vector patterns must resolve to the same number of files.
 
+The charge-values file is normally a constant-charge table. If the file has more than one column, the calculation uses the last column as the charge value. For two-column files, the first column may be a charge-site index for human bookkeeping, but it is not used to reorder coordinates; charge rows are expected to match the charge-coordinate site order after any optional deletion.
+
+Charge sites with charge exactly `0.0` are ignored before the charge-dipole calculation starts. This means they do not contribute to `Sqp(k)`, and they also do not define cutoff neighborhoods. With a cutoff enabled, only dipoles within the cutoff distance of nonzero charge sites are included.
+
 ### Charge-Dipole Fields
 
 - `Calculation Mode`: either `Directional` or `Isotropic`
-- `Charge Values Path`: file containing the charge values
+- `Charge Values Path`: file containing the charge values; if multiple columns are present, the last column is used
 - `Charge Coordinates Path`: coordinate pattern for charge positions
 - `Charge Coordinates Stride`: frame stride for the charge-coordinate input
 - `Dipole Positions Path`: coordinate pattern for dipole positions
@@ -1123,10 +1127,12 @@ In this mode, `Shell Width` is not used by the calculation.
 
 `CS-1`, `CS-2`, and `CS-3` are the matching cell sizes used with those cutoff tiers. If a cutoff is provided and the matching cell size is left empty, the generated workflow falls back to using the cutoff value as the cell size.
 
+Cutoffs are applied to distances between dipole positions and charge-coordinate sites whose charge value is nonzero. Zero-charge coordinate sites are masked out before the neighbor search, so they cannot add nearby dipoles to the cutoff-limited `Sqp(k)`.
+
 When a cutoff is used:
 
 - the script tracks how many dipoles are inside the cutoff for each processed frame
-- it writes `dipoles_in_cutoff.dat` in the same output directory
+- it writes one `dipole_count_<trajectory>.dat` file per processed trajectory in a `dipole_counts` directory next to the charge-dipole output
 
 ### Charge-Dipole Auxiliary Files
 
@@ -1134,7 +1140,7 @@ The generated scripts may also write:
 
 - per-file-set reports such as `output_1.dat`, `output_2.dat`, and so on
 - `status.log`
-- `dipoles_in_cutoff.dat`
+- `dipole_counts/dipole_count_<trajectory>.dat`
 
 ## Final notes
 

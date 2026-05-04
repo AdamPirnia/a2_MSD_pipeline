@@ -234,9 +234,9 @@ Input-handling highlights:
 - if multiple temperatures match one common-term list exactly, temperatures are paired with that common term instead of nested separately
 
 ### 6. Static Structure Factor
-This module generates workflows for isotropic static-structure-factor analysis from saved coordinate arrays.
+This module generates workflows for density and charge-dipole static-structure-factor analysis from saved coordinate arrays. In charge-dipole calculations, only nonzero charge sites define cutoff neighborhoods.
 
-Current inputs:
+Common density inputs:
 
 - `Base Directory`
 - `Common Terms`
@@ -244,7 +244,9 @@ Current inputs:
 - `Output Path`
 - `k Max`, `L_x`, `L_y`, `L_z`, and `tolerance`
 
-The generated workflow computes isotropic `S(k)` from the coordinate dataset and writes the result to the user-specified output path.
+Charge-dipole workflows add charge values, charge coordinates, dipole positions, and dipole vectors. If the charge-values file has multiple columns, the last column is used as the charge value; zero-charge sites are excluded before cutoff neighbor searches.
+
+The generated workflows write the requested density `S(k)` or charge-dipole `Sqp(k)` outputs to the user-specified output paths.
 
 `Isotropic static structure factor`
 
