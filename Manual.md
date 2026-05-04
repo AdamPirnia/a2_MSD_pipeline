@@ -1096,6 +1096,8 @@ Directional output format:
 - column 5: real part of the charge-dipole structure factor
 - column 6: imaginary part of the charge-dipole structure factor
 
+The directional values are raw accumulated values; they are not divided by the number of frames, trajectories, or dipoles.
+
 Isotropic output format produced from the directional data:
 
 - column 1: shell-averaged `|k|`
@@ -1112,7 +1114,7 @@ This mode writes one isotropic table directly.
 Output format:
 
 - column 1: `|k|`
-- column 2: not-normalized charge-dipole structure factor, `Sqp(k)`
+- column 2: raw accumulated charge-dipole structure factor, `Sqp(k)`; it is not divided by the number of frames, trajectories, or dipoles
 - column 3: average number of dipoles included by `CO-1`
 - column 4: average number of dipoles included by `CO-2`
 - column 5: average number of dipoles included by `CO-3`

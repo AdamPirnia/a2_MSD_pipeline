@@ -901,7 +901,7 @@ def _charge_dipole_isotropic_output_header(
     else:
         frame_window_text = f"range({frame_window[0]}, {frame_window[1]}, {frame_window[2]})"
     lines = [
-        "This file contains the magnitude of wave vectors, not normalized (by the number of dipoles) charge dipole structure factor, and number of dipoles in each cutoff value averaged over trajectories.",
+        "This file contains the magnitude of wave vectors, raw accumulated charge dipole structure factor, and number of dipoles in each cutoff value averaged over processed frames.",
         "k      Sqp(k)      Num. m (CO-1)      Num. m (CO-2)      Num. m (CO-3)",
         "######################",
         "Calculation mode: isotropic charge-dipole structure factor",
@@ -919,8 +919,8 @@ def _charge_dipole_isotropic_output_header(
         f"Cell sizes: CS-1={_format_header_value(cell_size_primary)}, CS-2={_format_header_value(cell_size_secondary)}, CS-3={_format_header_value(cell_size_tertiary)}",
         f"Charge sites: {int(charge_count)}",
         f"Dipoles per frame: {dipole_count}",
-        f"Total frames averaged: {int(frame_count)}",
-        f"Trajectories averaged: {int(trajectory_count)}",
+        f"Total frames accumulated: {int(frame_count)}",
+        f"Trajectories summed: {int(trajectory_count)}",
         f"Delete residue index: {_format_header_value(delete_residue_index)}",
         f"Trajectory desired length: {frame_window_text}",
         f"Trajectory selection: {_format_header_value(trajectory_selection)}",
@@ -1048,6 +1048,66 @@ def _average_saved_trajectory_outputs(
     if total_frames <= 0 or weighted_values is None:
         raise ValueError("No saved per-trajectory outputs were available for averaging.")
     return weighted_values / float(total_frames)
+
+
+def _sum_saved_trajectory_outputs(
+    *,
+    reports: list[dict[str, Any]],
+    value_columns: tuple[int, ...],
+    io_spec: dict[str, Any] | None,
+    default_mode: str,
+    default_precision: str,
+    expected_prefix: np.ndarray | None = None,
+    expected_prefix_columns: tuple[int, ...] | None = None,
+) -> np.ndarray:
+    summed_values: np.ndarray | None = None
+    prefix_values: np.ndarray | None = None
+
+    for report in reports:
+        report_path = str(report["output_file"])
+        trajectory_output = load_numeric_array(
+            report_path,
+            io_spec,
+            default_mode=default_mode,
+            default_precision=default_precision,
+        )
+        trajectory_output = np.asarray(trajectory_output, dtype=np.float64)
+        if trajectory_output.ndim == 1:
+            trajectory_output = trajectory_output.reshape(1, -1)
+        if trajectory_output.shape[1] <= max(value_columns):
+            raise ValueError(f"Per-trajectory output has too few columns: {report_path}")
+
+        if expected_prefix is not None and expected_prefix_columns is not None:
+            current_prefix = trajectory_output[:, list(expected_prefix_columns)]
+            if current_prefix.shape != expected_prefix.shape or not np.allclose(
+                current_prefix,
+                expected_prefix,
+                rtol=1.0e-10,
+                atol=1.0e-12,
+            ):
+                raise ValueError(f"Per-trajectory k values do not match the current run: {report_path}")
+            prefix_values = expected_prefix
+        elif prefix_values is None:
+            prefix_end = min(value_columns)
+            prefix_values = trajectory_output[:, :prefix_end].copy()
+        elif not np.allclose(
+            trajectory_output[:, : prefix_values.shape[1]],
+            prefix_values,
+            rtol=1.0e-10,
+            atol=1.0e-12,
+        ):
+            raise ValueError(f"Per-trajectory coordinate columns do not match the current run: {report_path}")
+
+        values = trajectory_output[:, list(value_columns)]
+        if summed_values is None:
+            summed_values = np.zeros_like(values, dtype=np.float64)
+        if values.shape != summed_values.shape:
+            raise ValueError(f"Per-trajectory value shape does not match the current run: {report_path}")
+        summed_values += values
+
+    if summed_values is None:
+        raise ValueError("No saved per-trajectory outputs were available for summing.")
+    return summed_values
 
 
 def _natural_sort_key(value: str) -> list[Any]:
@@ -2353,7 +2413,7 @@ def compute_charge_dipole_structure_factor_from_files(
         dipoles_count_files.append(dipoles_count_file)
         total_frames += int(frame_count)
         elapsed_s = float(time.time() - trajectory_start)
-        directional_average_single = np.asarray(directional_values, dtype=np.complex128) / float(frame_count)
+        directional_raw_single = np.asarray(directional_values, dtype=np.complex128)
         per_file_stats.append(
             {
                 "charge_coordinate_file": rq_file,
@@ -2367,7 +2427,7 @@ def compute_charge_dipole_structure_factor_from_files(
         )
         k_shell_single, isotropic_single, shell_counts_single = _shell_average_complex(
             k_magnitudes,
-            directional_average_single,
+            directional_raw_single,
             float(shell_width),
         )
         isotropic_single_trajectory_reports.append(
@@ -2383,7 +2443,7 @@ def compute_charge_dipole_structure_factor_from_files(
         directional_report_path = _write_single_trajectory_output(
             directional_output_path,
             file_index,
-            np.column_stack((k_vectors_array, k_magnitudes, directional_average_single.real, directional_average_single.imag)),
+            np.column_stack((k_vectors_array, k_magnitudes, directional_raw_single.real, directional_raw_single.imag)),
             directional_output_io_spec,
             default_mode="text",
             default_precision="double",
@@ -2401,13 +2461,13 @@ def compute_charge_dipole_structure_factor_from_files(
         )
         del charge_position_array, dipole_position_array, dipole_vector_array
         del charge_positions, dipole_positions, dipole_vectors, dipole_directions
-        del directional_values, directional_average_single, frame_dipole_counts
+        del directional_values, directional_raw_single, frame_dipole_counts
         print(f"  accumulated frames: {total_frames}", flush=True)
 
     if total_frames <= 0:
         raise ValueError("No frames were accumulated for the charge-dipole structure-factor calculation.")
 
-    directional_components = _average_saved_trajectory_outputs(
+    directional_components = _sum_saved_trajectory_outputs(
         reports=directional_reports,
         value_columns=(4, 5),
         io_spec=directional_output_io_spec,
@@ -2416,11 +2476,11 @@ def compute_charge_dipole_structure_factor_from_files(
         expected_prefix=np.column_stack((k_vectors_array, k_magnitudes)),
         expected_prefix_columns=(0, 1, 2, 3),
     )
-    directional_average = directional_components[:, 0] + 1j * directional_components[:, 1]
-    k_shell, isotropic_shell, shell_counts = _shell_average_complex(k_magnitudes, directional_average, float(shell_width))
+    directional_raw_total = directional_components[:, 0] + 1j * directional_components[:, 1]
+    k_shell, isotropic_shell, shell_counts = _shell_average_complex(k_magnitudes, directional_raw_total, float(shell_width))
 
     isotropic_output_array = np.column_stack((k_shell, isotropic_shell.real, isotropic_shell.imag, shell_counts))
-    directional_output_array = np.column_stack((k_vectors_array, k_magnitudes, directional_average.real, directional_average.imag))
+    directional_output_array = np.column_stack((k_vectors_array, k_magnitudes, directional_raw_total.real, directional_raw_total.imag))
 
     save_numeric_array(
         isotropic_output_path,
@@ -2450,7 +2510,7 @@ def compute_charge_dipole_structure_factor_from_files(
         "isotropic_shell_count": int(k_shell.shape[0]),
         "k_vectors": k_vectors_array,
         "k_magnitudes": k_magnitudes,
-        "directional_values": directional_average,
+        "directional_values": directional_raw_total,
         "k_shell": k_shell,
         "isotropic_values": isotropic_shell,
         "shell_counts": shell_counts,
@@ -2665,7 +2725,7 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
             np.column_stack(
                 (
                     k_magnitudes_array,
-                    np.asarray(isotropic_values_total, dtype=np.float64) / float(frame_count),
+                    np.asarray(isotropic_values_total, dtype=np.float64),
                     tier_count_columns,
                 )
             ),
@@ -3011,7 +3071,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     if total_frames <= 0:
         raise ValueError("No frames were accumulated for the charge-dipole structure-factor calculation.")
 
-    isotropic_average_total = _average_saved_trajectory_outputs(
+    isotropic_raw_total = _sum_saved_trajectory_outputs(
         reports=isotropic_reports,
         value_columns=(1,),
         io_spec=isotropic_output_io_spec,
@@ -3029,7 +3089,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     )
 
     cutoff_count_columns = np.tile(cutoff_count_averages, (k_magnitudes.shape[0], 1))
-    isotropic_output_array = np.column_stack((k_magnitudes, isotropic_average_total, cutoff_count_columns))
+    isotropic_output_array = np.column_stack((k_magnitudes, isotropic_raw_total, cutoff_count_columns))
     dipole_counts = sorted({int(item["dipole_count"]) for item in per_file_stats})
     dipole_count_header: int | str
     if len(dipole_counts) == 1:
@@ -3087,7 +3147,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         "mode": "isotropic",
         "isotropic_k_count": int(k_magnitudes.shape[0]),
         "k_magnitudes": k_magnitudes,
-        "isotropic_values": isotropic_average_total,
+        "isotropic_values": isotropic_raw_total,
         "dipoles_in_cutoff_averages": cutoff_count_averages,
         "total_frames": int(total_frames),
         "isotropic_output_file": isotropic_output_path,
