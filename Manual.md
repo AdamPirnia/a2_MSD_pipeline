@@ -517,8 +517,10 @@ Fields:
 
 - `Calculation Type`: choose `alpha2_msd` or `alpha_xz`
 - `Input File Pattern`: full input `path + filename + extension` pattern for COM files
-- `Output File Pattern`: full output `path + filename + extension` used as the base name for generated analysis results
-- `Min frames`: minimum number of frames expected in each input file
+- `Alpha2 Output File Pattern`: shown when `Calculation Type = alpha2_msd`; full output `path + filename + extension` for `α₂(t)` results
+- `MSD Output File Pattern`: shown when `Calculation Type = alpha2_msd`; full output `path + filename + extension` for MSD results
+- `Anisotropic NGP Output File Pattern`: shown when `Calculation Type = alpha_xz`; full output `path + filename + extension` used as the base for anisotropic NGP result files
+- `Min frames (optional)`: optional minimum number of frames expected in each input file
 - `DCD Selection (optional)`: optional subset of DCD indices to process
 
 Option:
@@ -534,16 +536,14 @@ The generated workflow computes:
 
 Use this when you want translational dynamics and non-Gaussian behavior from COM trajectories.
 
-The `Output File Pattern` is used as the base name of the generated result files. For example, if you provide:
+The two output fields are written independently. For example, you can provide:
 
 ```text
-anlz/NVT_*/analysis/ngp_results.dat
+Alpha2 Output File Pattern = anlz/NVT_*/analysis/ngp_results_a2.dat
+MSD Output File Pattern = anlz/NVT_*/analysis/ngp_results_MSD.dat
 ```
 
-the generated files will use that base path and produce module-specific result names such as:
-
-- `ngp_results_MSD.dat`
-- `ngp_results_a2.dat`
+and the generated workflow will save each result to the matching path.
 
 Output units:
 
@@ -556,7 +556,13 @@ The generated workflow computes anisotropy-related quantities, including the ani
 
 Use this when you want directional anisotropy information rather than the standard `α₂(t)` and MSD workflow.
 
-The `Output File Pattern` is again used as the base name, and the anisotropy workflow generates related result files derived from that base name.
+The `Anisotropic NGP Output File Pattern` is used as the base name, and the anisotropy workflow generates related result files derived from that base name. For example:
+
+```text
+Anisotropic NGP Output File Pattern = anlz/NVT_*/analysis/ani_results.dat
+```
+
+generates result files such as `ani_results_axz.dat`, `ani_results_axy.dat`, `ani_results_ayz.dat`, and `ani_results_anisotropy.dat`.
 
 Output units:
 

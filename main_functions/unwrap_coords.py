@@ -489,26 +489,37 @@ exit 0
     return group_indices
 
 
-def _place_group_in_primary_cell(group_coords, box_size):
-    """Shift a whole group into the primary cell when its extent fits in the box."""
+def _periodic_group_center(axis_coords, length):
+    """Return a wrapped center for one periodic coordinate axis."""
 
-    placed = np.array(group_coords, copy=True)
+    wrapped = np.mod(axis_coords, length)
+    angles = wrapped * (2.0 * np.pi / length)
+    sin_mean = float(np.mean(np.sin(angles)))
+    cos_mean = float(np.mean(np.cos(angles)))
+    if np.hypot(sin_mean, cos_mean) < 1e-12:
+        return float(wrapped[0])
+    angle = np.arctan2(sin_mean, cos_mean)
+    return float(np.mod(angle * length / (2.0 * np.pi), length))
+
+
+def _make_group_whole_and_centered(group_coords, box_size):
+    """Make a group whole across PBC and place its geometric center in the primary cell."""
+
+    repaired = np.array(group_coords, copy=True)
     for axis in range(3):
-        length = box_size[axis]
-        axis_min = float(np.min(placed[:, axis]))
-        axis_max = float(np.max(placed[:, axis]))
-        width = axis_max - axis_min
-        if width < length:
-            shift_count = np.ceil(-axis_min / length)
-            shifted_min = axis_min + shift_count * length
-            shifted_max = axis_max + shift_count * length
-            if shifted_min >= 0.0 and shifted_max < length:
-                placed[:, axis] += shift_count * length
-                continue
+        length = float(box_size[axis])
+        if length <= 0.0:
+            raise ValueError(f"Invalid box length for axis {axis}: {length}")
 
-        anchor_shift = -np.floor(placed[0, axis] / length) * length
-        placed[:, axis] += anchor_shift
-    return placed
+        wrapped_axis = np.mod(group_coords[:, axis], length)
+        center = _periodic_group_center(group_coords[:, axis], length)
+        delta = wrapped_axis - center
+        delta -= length * np.round(delta / length)
+        repaired[:, axis] = center + delta
+
+        group_center = float(np.mean(repaired[:, axis]))
+        repaired[:, axis] -= np.floor(group_center / length) * length
+    return repaired
 
 
 def _repair_first_frame_by_group(first_frame, box_size, group_indices):
@@ -519,11 +530,7 @@ def _repair_first_frame_by_group(first_frame, box_size, group_indices):
         if len(indices) <= 1:
             repaired[indices] = np.mod(repaired[indices], box_size)
             continue
-        reference = repaired[indices[0]].copy()
-        relative = repaired[indices] - reference
-        relative -= box_size * np.round(relative / box_size)
-        repaired_group = reference + relative
-        repaired[indices] = _place_group_in_primary_cell(repaired_group, box_size)
+        repaired[indices] = _make_group_whole_and_centered(repaired[indices], box_size)
     return repaired, repaired - first_frame
 
 

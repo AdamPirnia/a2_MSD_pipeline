@@ -13,7 +13,7 @@ except ImportError:
 
 ######################################################    Parameters    
 
-def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFrames, input_stride=1, validate_data=True, common_term="", dcd_indices=None, input_io_spec=None, output_io_spec=None):
+def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFrames=None, input_stride=1, validate_data=True, common_term="", dcd_indices=None, input_io_spec=None, output_io_spec=None):
     """
     Compute directional non-Gaussian parameter α_xz(t) for a set of particles
     from a series of center-of-mass (COM) trajectory files. This parameter
@@ -36,10 +36,10 @@ def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFra
         Number of particles whose COM position is stored in each file.
         Each .dat file is expected to have `partcl_num*3` columns: x, y, z
         for each molecule.
-    numFrames : int
+    numFrames : int, optional
         Minimum number of time-points in each .dat file to include it in the
-        average. If a file has fewer lines than `numFrames`, it is skipped
-        (and counted as a failure).
+        average. If omitted, all readable files are included and the common
+        frame count is inferred from the shortest successful file.
     validate_data : bool, optional
         Perform data validation checks during processing.
     common_term : str, optional
@@ -77,7 +77,14 @@ def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFra
     print(f"Output pattern: {output_pattern}")
     print(f"Common term: {common_term}")
     print(f"Number of DCDs: {num_dcd}")
-    print(f"Particles: {partcl_num}, Min frames: {numFrames}")
+    if numFrames in ("", None):
+        min_frames = None
+        print(f"Particles: {partcl_num}, Min frames: not set")
+    else:
+        min_frames = int(numFrames)
+        if min_frames <= 0:
+            raise ValueError("numFrames must be a positive integer when provided.")
+        print(f"Particles: {partcl_num}, Min frames: {min_frames}")
     input_stride = int(input_stride)
     if input_stride <= 0:
         raise ValueError("input_stride must be a positive integer.")
@@ -122,7 +129,7 @@ def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFra
     
     print(f"Starting α_xz(t) calculation...")
     print(f"Processing {len(dcd_list)} trajectory files with {partcl_num} particles")
-    print(f"Minimum frames required: {numFrames}")
+    print(f"Minimum frames required: {min_frames if min_frames is not None else 'not set'}")
     
     try:
         # Initialize accumulators - will be set after processing first successful file
@@ -156,10 +163,12 @@ def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFra
                     data = data[::input_stride]
                 
                 # Validate frame length
-                if len(data) < numFrames:
-                    print(f"⚠ File {f}: {len(data)} frames < {numFrames} required")
+                if min_frames is not None and len(data) < min_frames:
+                    print(f"⚠ File {f}: {len(data)} frames < {min_frames} required")
                     results['skipped_files'].append(f)
                     continue
+                if min_frames is not None:
+                    data = data[:min_frames]
                 
                 # Reshape data to (frames, molecules, 3)
                 data = data.reshape(len(data), partcl_num, 3)
@@ -188,6 +197,25 @@ def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFra
                     x2z2_accumulator = np.zeros_like(dx2_dz2, dtype=np.float64)
                     x2y2_accumulator = np.zeros_like(dx2_dy2, dtype=np.float64)
                     y2z2_accumulator = np.zeros_like(dy2_dz2, dtype=np.float64)
+                elif len(dx2) != len(x2_accumulator):
+                    common_frames = min(len(dx2), len(x2_accumulator))
+                    if common_frames == 0:
+                        print(f"⚠ File {f}: no frames available after stride")
+                        results['skipped_files'].append(f)
+                        continue
+                    if len(x2_accumulator) != common_frames:
+                        x2_accumulator = x2_accumulator[:common_frames]
+                        y2_accumulator = y2_accumulator[:common_frames]
+                        z2_accumulator = z2_accumulator[:common_frames]
+                        x2z2_accumulator = x2z2_accumulator[:common_frames]
+                        x2y2_accumulator = x2y2_accumulator[:common_frames]
+                        y2z2_accumulator = y2z2_accumulator[:common_frames]
+                    dx2 = dx2[:common_frames]
+                    dy2 = dy2[:common_frames]
+                    dz2 = dz2[:common_frames]
+                    dx2_dz2 = dx2_dz2[:common_frames]
+                    dx2_dy2 = dx2_dy2[:common_frames]
+                    dy2_dz2 = dy2_dz2[:common_frames]
                 
                 # Type assertions for the linter
                 assert x2_accumulator is not None and z2_accumulator is not None and x2z2_accumulator is not None and y2_accumulator is not None and x2y2_accumulator is not None and y2z2_accumulator is not None
