@@ -1069,6 +1069,7 @@ Charge sites with charge exactly `0.0` are ignored before the charge-dipole calc
 ### Charge-Dipole Fields
 
 - `Calculation Mode`: either `Directional` or `Isotropic`
+- `Small k approx`: when checked, uses the first-order small-`k` approximation for the selected charge-dipole mode
 - `Charge Values Path`: file containing the charge values; if multiple columns are present, the last column is used
 - `Charge Coordinates Path`: coordinate pattern for charge positions
 - `Charge Coordinates Stride`: frame stride for the charge-coordinate input
@@ -1086,12 +1087,43 @@ Charge sites with charge exactly `0.0` are ignored before the charge-dipole calc
 
 The charge-dipole tab uses the same three `k`-resolution tiers in both directional and isotropic modes.
 
+- `Cell 1`, `Cell 2`, and `Cell 3` define the orthorhombic cell dimensions used for the first, second, and third `k` tiers.
+- `Cell 1` must contain three positive lengths. If `Cell 2` or `Cell 3` is left empty, it reuses the previous tier's cell dimensions.
 - `Resolution: res. 1`, `res. 2`, `res. 3` are the minimum spacing kept between neighboring `|k|` values within the first, second, and third tiers.
 - Directional mode keeps all reciprocal-vector directions whose `|k|` value survives that tier's resolution filter.
+- The same cell dimensions, `k` tiers, cutoffs, and cell-list settings are used by both full charge-dipole formulas and the `Small k approx` formulas.
+
+For all charge-dipole calculations, the distance vector is defined as:
+
+$$
+\mathbf r_{q,p} = \mathbf r_p - \mathbf r_q
+$$
+
+where `q` is the charge site and `p` is the dipole position. This vector points from the charge site to the dipole position.
 
 ### Charge-Dipole Directional Mode
 
 This mode writes both a directional table and an isotropic shell average derived from it.
+
+With `Small k approx` unchecked, the directional charge-dipole structure factor is:
+
+$$
+S_{qp}(\mathbf k) =
+i\sum_q\sum_p
+z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf k}\right)
+\exp\!\left(i\mathbf k\cdot\mathbf r_{q,p}\right)
+$$
+
+With `Small k approx` checked, the first-order small-`k` directional approximation is:
+
+$$
+S_{qp}(\mathbf k) \simeq
+-k\sum_q\sum_p
+z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf k}\right)
+\left(\hat{\mathbf k}\cdot\mathbf r_{q,p}\right)
+$$
+
+The small-`k` directional approximation is real-valued. The output still keeps the same real/imaginary column layout as the full directional calculation; the imaginary column is zero in small-`k` mode.
 
 Directional output format:
 
@@ -1116,6 +1148,24 @@ Isotropic output format produced from the directional data:
 ### Charge-Dipole Isotropic Mode
 
 This mode writes one isotropic table directly.
+
+With `Small k approx` unchecked, the isotropic charge-dipole structure factor is:
+
+$$
+S_{qp}(k) =
+-\sum_q\sum_p
+z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf r}_{q,p}\right)
+j_1\!\left(k|\mathbf r_{q,p}|\right)
+$$
+
+With `Small k approx` checked, the first-order small-`k` isotropic approximation is:
+
+$$
+S_{qp}(k) \simeq
+-\frac{k}{3}
+\sum_q\sum_p
+z_q\left(\hat{\mathbf e}_p\cdot\mathbf r_{q,p}\right)
+$$
 
 Output format:
 

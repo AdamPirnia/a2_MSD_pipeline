@@ -46,6 +46,23 @@ def _resolve_three_tier_k_parameters(
     return k1, k2, k3, s1, s2, s3
 
 
+def _resolve_three_tier_cell_dimensions(
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    cell_dimensions: Any | None = None,
+) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
+    if cell_dimensions is None:
+        dims = ((float(Lx), float(Ly), float(Lz)),) * 3
+    else:
+        dims = tuple(tuple(float(value) for value in row) for row in cell_dimensions)
+        if len(dims) != 3 or any(len(row) != 3 for row in dims):
+            raise ValueError("cell_dimensions must contain three Cell entries, each with three lengths.")
+    if any(value <= 0 for row in dims for value in row):
+        raise ValueError("Cell dimensions must be positive.")
+    return dims  # type: ignore[return-value]
+
+
 def isotropic_structure_factor_db_density(
     r_flat: np.ndarray,
     k_vals: np.ndarray,
@@ -187,6 +204,7 @@ def isotropic_k_magnitudes_three_tier(
     kmax2: float,
     kmax3: float,
     dtype: Any = np.float64,
+    cell_dimensions: Any | None = None,
 ) -> np.ndarray:
     kmax1, kmax2, kmax3 = float(kmax1), float(kmax2), float(kmax3)
     if kmax1 < 0 or kmax2 <= 0 or kmax3 <= 0:
@@ -194,19 +212,27 @@ def isotropic_k_magnitudes_three_tier(
     if kmax1 > kmax2 or kmax2 > kmax3:
         raise ValueError("kmax values must satisfy kmax1 <= kmax2 <= kmax3.")
 
+    dims = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
+    tiers = (
+        (*dims[0], 0.0, kmax1),
+        (*dims[1], kmax1, kmax2),
+        (*dims[2], kmax2, kmax3),
+    )
     two_pi = np.array(2.0 * np.pi, dtype=dtype)
-    nxmax = int(np.ceil(kmax3 * Lx / two_pi))
-    nymax = int(np.ceil(kmax3 * Ly / two_pi))
-    nzmax = int(np.ceil(kmax3 * Lz / two_pi))
-
     kmags: list[float] = []
-    for nx in range(1, nxmax + 1):
-        for ny in range(1, nymax + 1):
-            for nz in range(1, nzmax + 1):
-                kvec = two_pi * np.array([nx / Lx, ny / Ly, nz / Lz], dtype=dtype)
-                kmag = float(np.linalg.norm(kvec))
-                if 0.0 < kmag <= float(kmax3):
-                    kmags.append(kmag)
+    for Lx_use, Ly_use, Lz_use, lower, upper in tiers:
+        if upper <= lower:
+            continue
+        nxmax = int(np.ceil(upper * Lx_use / two_pi))
+        nymax = int(np.ceil(upper * Ly_use / two_pi))
+        nzmax = int(np.ceil(upper * Lz_use / two_pi))
+        for nx in range(1, nxmax + 1):
+            for ny in range(1, nymax + 1):
+                for nz in range(1, nzmax + 1):
+                    kvec = two_pi * np.array([nx / Lx_use, ny / Ly_use, nz / Lz_use], dtype=dtype)
+                    kmag = float(np.linalg.norm(kvec))
+                    if lower < kmag <= upper:
+                        kmags.append(kmag)
 
     if not kmags:
         return np.empty(0, dtype=dtype)
@@ -225,6 +251,7 @@ def directional_k_vectors_three_tier(
     kmax3: float,
     active_axes: tuple[str, ...] | None = None,
     dtype: Any = np.float64,
+    cell_dimensions: Any | None = None,
 ) -> np.ndarray:
     kmax1, kmax2, kmax3 = float(kmax1), float(kmax2), float(kmax3)
     if kmax1 < 0 or kmax2 <= 0 or kmax3 <= 0:
@@ -234,25 +261,32 @@ def directional_k_vectors_three_tier(
 
     axis_order = ("x", "y", "z")
     active = set(active_axes or axis_order)
-    length_map = {"x": float(Lx), "y": float(Ly), "z": float(Lz)}
-    limits = {
-        axis: int(np.ceil(kmax3 * length_map[axis] / (2.0 * np.pi)))
-        for axis in axis_order
-    }
-
+    dims = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
     vectors: list[tuple[float, float, float]] = []
-    for nx in range(0, limits["x"] + 1 if "x" in active else 1):
-        for ny in range(0, limits["y"] + 1 if "y" in active else 1):
-            for nz in range(0, limits["z"] + 1 if "z" in active else 1):
-                if nx == 0 and ny == 0 and nz == 0:
-                    continue
-                kvec = 2.0 * np.pi * np.array(
-                    [nx / float(Lx), ny / float(Ly), nz / float(Lz)],
-                    dtype=dtype,
-                )
-                mag = float(np.linalg.norm(kvec))
-                if 0.0 < mag <= float(kmax3):
-                    vectors.append((float(kvec[0]), float(kvec[1]), float(kvec[2])))
+    for Lx_use, Ly_use, Lz_use, lower, upper in (
+        (*dims[0], 0.0, kmax1),
+        (*dims[1], kmax1, kmax2),
+        (*dims[2], kmax2, kmax3),
+    ):
+        if upper <= lower:
+            continue
+        length_map = {"x": Lx_use, "y": Ly_use, "z": Lz_use}
+        limits = {
+            axis: int(np.ceil(upper * length_map[axis] / (2.0 * np.pi)))
+            for axis in axis_order
+        }
+        for nx in range(0, limits["x"] + 1 if "x" in active else 1):
+            for ny in range(0, limits["y"] + 1 if "y" in active else 1):
+                for nz in range(0, limits["z"] + 1 if "z" in active else 1):
+                    if nx == 0 and ny == 0 and nz == 0:
+                        continue
+                    kvec = 2.0 * np.pi * np.array(
+                        [nx / Lx_use, ny / Ly_use, nz / Lz_use],
+                        dtype=dtype,
+                    )
+                    mag = float(np.linalg.norm(kvec))
+                    if lower < mag <= upper:
+                        vectors.append((float(kvec[0]), float(kvec[1]), float(kvec[2])))
 
     if not vectors:
         return np.empty((0, 3), dtype=dtype)
@@ -895,16 +929,23 @@ def _charge_dipole_isotropic_output_header(
     delete_residue_index: int | None,
     frame_window: tuple[int, int | None, int] | None,
     trajectory_selection: str | None,
+    small_k_approx: bool = False,
 ) -> str:
     if frame_window is None:
         frame_window_text = "full trajectory"
     else:
         frame_window_text = f"range({frame_window[0]}, {frame_window[1]}, {frame_window[2]})"
+    formula = (
+        "Formula: Sqp(k) ~= -(k/3) * sum_q sum_p z_q (e_hat_p . r_qp)"
+        if small_k_approx
+        else "Formula: Sqp(k) = -sum_q sum_p z_q (e_hat_p . r_hat_qp) j1(k |r_qp|)"
+    )
     lines = [
         "This file contains the magnitude of wave vectors, raw accumulated charge dipole structure factor, and number of dipoles in each cutoff value averaged over processed frames.",
         "k      Sqp(k)      Num. m (CO-1)      Num. m (CO-2)      Num. m (CO-3)",
         "######################",
-        "Calculation mode: isotropic charge-dipole structure factor",
+        f"Calculation mode: isotropic charge-dipole structure factor{' small-k approximation' if small_k_approx else ''}",
+        formula,
         f"Charge values path: {charge_values_path}",
         f"Charge coordinates path: {charge_coords_pattern}",
         f"Charge coordinates stride: {int(charge_coords_stride)}",
@@ -1468,6 +1509,7 @@ def charge_dipole_k_vectors_three_tier(
     res3: float,
     dtype: Any = np.float64,
     include_zero: bool = False,
+    cell_dimensions: Any | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     if kmax1 < 0 or kmax2 <= 0 or kmax3 <= 0:
         raise ValueError("kmax values must satisfy kmax1 >= 0, kmax2 > 0, and kmax3 > 0.")
@@ -1476,27 +1518,34 @@ def charge_dipole_k_vectors_three_tier(
     if float(res1) <= 0 or float(res2) <= 0 or float(res3) <= 0:
         raise ValueError("k resolutions must be positive.")
 
+    dims = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
     two_pi = np.array(2.0 * np.pi, dtype=dtype)
-    nxmax = int(np.ceil(float(kmax3) * float(Lx) / float(two_pi)))
-    nymax = int(np.ceil(float(kmax3) * float(Ly) / float(two_pi)))
-    nzmax = int(np.ceil(float(kmax3) * float(Lz) / float(two_pi)))
-
     kmags: list[float] = []
     kvecs: list[tuple[float, float, float]] = []
-    for nx in range(-nxmax, nxmax + 1):
-        for ny in range(-nymax, nymax + 1):
-            for nz in range(-nzmax, nzmax + 1):
-                if not include_zero and nx == 0 and ny == 0 and nz == 0:
-                    continue
+    for Lx_use, Ly_use, Lz_use, lower, upper in (
+        (*dims[0], 0.0, float(kmax1)),
+        (*dims[1], float(kmax1), float(kmax2)),
+        (*dims[2], float(kmax2), float(kmax3)),
+    ):
+        if upper <= lower:
+            continue
+        nxmax = int(np.ceil(upper * float(Lx_use) / float(two_pi)))
+        nymax = int(np.ceil(upper * float(Ly_use) / float(two_pi)))
+        nzmax = int(np.ceil(upper * float(Lz_use) / float(two_pi)))
+        for nx in range(-nxmax, nxmax + 1):
+            for ny in range(-nymax, nymax + 1):
+                for nz in range(-nzmax, nzmax + 1):
+                    if not include_zero and nx == 0 and ny == 0 and nz == 0:
+                        continue
 
-                kvec = two_pi * np.array(
-                    [nx / float(Lx), ny / float(Ly), nz / float(Lz)],
-                    dtype=dtype,
-                )
-                kmag = float(np.linalg.norm(kvec))
-                if 0.0 < kmag <= float(kmax3):
-                    kmags.append(kmag)
-                    kvecs.append((float(kvec[0]), float(kvec[1]), float(kvec[2])))
+                    kvec = two_pi * np.array(
+                        [nx / float(Lx_use), ny / float(Ly_use), nz / float(Lz_use)],
+                        dtype=dtype,
+                    )
+                    kmag = float(np.linalg.norm(kvec))
+                    if lower < kmag <= upper:
+                        kmags.append(kmag)
+                        kvecs.append((float(kvec[0]), float(kvec[1]), float(kvec[2])))
 
     if not kmags:
         return np.empty(0, dtype=dtype), np.empty((0, 3), dtype=dtype)
@@ -1535,6 +1584,7 @@ def charge_dipole_k_magnitudes_by_resolution_three_tier(
     res2: float,
     res3: float,
     dtype: Any = np.float64,
+    cell_dimensions: Any | None = None,
 ) -> np.ndarray:
     if kmax1 < 0 or kmax2 <= 0 or kmax3 <= 0:
         raise ValueError("kmax values must satisfy kmax1 >= 0, kmax2 > 0, and kmax3 > 0.")
@@ -1543,26 +1593,32 @@ def charge_dipole_k_magnitudes_by_resolution_three_tier(
     if float(res1) <= 0 or float(res2) <= 0 or float(res3) <= 0:
         raise ValueError("k resolutions must be positive.")
 
-    two_pi = float(2.0 * np.pi)
-    nxmax = int(np.ceil(float(kmax3) * float(Lx) / two_pi))
-    nymax = int(np.ceil(float(kmax3) * float(Ly) / two_pi))
-    nzmax = int(np.ceil(float(kmax3) * float(Lz) / two_pi))
-
-    z_terms = (np.arange(0, nzmax + 1, dtype=np.float64) / float(Lz)) ** 2
-    kmax3_float = float(kmax3)
     chunks: list[np.ndarray] = []
-    for nx in range(0, nxmax + 1):
-        x_term = (float(nx) / float(Lx)) ** 2
-        for ny in range(0, nymax + 1):
-            if nx == 0 and ny == 0:
-                nz_start = 1
-            else:
-                nz_start = 0
-            y_term = (float(ny) / float(Ly)) ** 2
-            mags = two_pi * np.sqrt(x_term + y_term + z_terms[nz_start:])
-            mags = mags[(mags > 0.0) & (mags <= kmax3_float)]
-            if mags.size > 0:
-                chunks.append(mags.astype(dtype, copy=False))
+    dims = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
+    two_pi = float(2.0 * np.pi)
+    for Lx_use, Ly_use, Lz_use, lower, upper in (
+        (*dims[0], 0.0, float(kmax1)),
+        (*dims[1], float(kmax1), float(kmax2)),
+        (*dims[2], float(kmax2), float(kmax3)),
+    ):
+        if upper <= lower:
+            continue
+        nxmax = int(np.ceil(upper * float(Lx_use) / two_pi))
+        nymax = int(np.ceil(upper * float(Ly_use) / two_pi))
+        nzmax = int(np.ceil(upper * float(Lz_use) / two_pi))
+        z_terms = (np.arange(0, nzmax + 1, dtype=np.float64) / float(Lz_use)) ** 2
+        for nx in range(0, nxmax + 1):
+            x_term = (float(nx) / float(Lx_use)) ** 2
+            for ny in range(0, nymax + 1):
+                if nx == 0 and ny == 0:
+                    nz_start = 1
+                else:
+                    nz_start = 0
+                y_term = (float(ny) / float(Ly_use)) ** 2
+                mags = two_pi * np.sqrt(x_term + y_term + z_terms[nz_start:])
+                mags = mags[(mags > lower) & (mags <= upper)]
+                if mags.size > 0:
+                    chunks.append(mags.astype(dtype, copy=False))
 
     if not chunks:
         return np.empty(0, dtype=dtype)
@@ -1599,6 +1655,7 @@ def density_k_magnitudes_by_resolution_three_tier(
     res2: float,
     res3: float,
     dtype: Any = np.float64,
+    cell_dimensions: Any | None = None,
 ) -> np.ndarray:
     unique_k = np.unique(
         isotropic_k_magnitudes_three_tier(
@@ -1609,6 +1666,7 @@ def density_k_magnitudes_by_resolution_three_tier(
             kmax2,
             kmax3,
             dtype=dtype,
+            cell_dimensions=cell_dimensions,
         )
     )
     if unique_k.size == 0:
@@ -1632,6 +1690,7 @@ def directional_k_vectors_by_resolution_three_tier(
     res3: float,
     active_axes: tuple[str, ...] | None = None,
     dtype: Any = np.float64,
+    cell_dimensions: Any | None = None,
 ) -> np.ndarray:
     all_vectors = directional_k_vectors_three_tier(
         Lx,
@@ -1642,6 +1701,7 @@ def directional_k_vectors_by_resolution_three_tier(
         kmax3,
         active_axes=active_axes,
         dtype=dtype,
+        cell_dimensions=cell_dimensions,
     )
     if all_vectors.size == 0:
         return all_vectors
@@ -1717,6 +1777,7 @@ def charge_dipole_structure_factor_isotropic(
     k_chunk: int = 256,
     dtype: Any = np.float64,
     normalize_by_frames: bool = True,
+    small_k_approx: bool = False,
     status_logger: _StatusLogger | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     k_vals_use = np.asarray(k_magnitudes, dtype=dtype)
@@ -1855,10 +1916,16 @@ def charge_dipole_structure_factor_isotropic(
                         r_hat = dr_valid / r[:, None]
                         weights = zq * np.sum(ehat_valid * r_hat, axis=1)
 
-                        for k0 in range(0, int(k_vals_use.shape[0]), k_chunk_use):
-                            k1 = min(int(k_vals_use.shape[0]), k0 + k_chunk_use)
-                            kr = np.outer(k_vals_use[k0:k1], r)
-                            frame_out[k0:k1] += np.sum(weights[None, :] * _spherical_bessel_j1(kr), axis=1)
+                        if small_k_approx:
+                            pair_sum = np.sum(weights * r)
+                            for k0 in range(0, int(k_vals_use.shape[0]), k_chunk_use):
+                                k1 = min(int(k_vals_use.shape[0]), k0 + k_chunk_use)
+                                frame_out[k0:k1] += (k_vals_use[k0:k1] / 3.0) * pair_sum
+                        else:
+                            for k0 in range(0, int(k_vals_use.shape[0]), k_chunk_use):
+                                k1 = min(int(k_vals_use.shape[0]), k0 + k_chunk_use)
+                                kr = np.outer(k_vals_use[k0:k1], r)
+                                frame_out[k0:k1] += np.sum(weights[None, :] * _spherical_bessel_j1(kr), axis=1)
             last_used_dipole_count = dipole_count if used_dipoles_mask is None else int(np.count_nonzero(used_dipoles_mask))
             frame_dipole_counts[frame_index] = last_used_dipole_count
             out_total += frame_out
@@ -1894,6 +1961,7 @@ def charge_dipole_structure_factor_directional(
     k_chunk: int = 256,
     dtype: Any = np.float64,
     normalize_by_frames: bool = True,
+    small_k_approx: bool = False,
     status_logger: _StatusLogger | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     k_vectors_use = np.asarray(k_vectors_array, dtype=dtype)
@@ -1936,6 +2004,7 @@ def charge_dipole_structure_factor_directional(
     cutoff, cell_size = _validate_cutoff_and_cell_size(cutoff, cell_size, label="Charge-dipole structure factor")
 
     khat = _build_khat(k_vectors_use)
+    k_magnitudes = np.linalg.norm(k_vectors_use, axis=1).astype(np.float64, copy=False)
     cutoff_sq = None if cutoff is None else float(cutoff) ** 2
 
     out_re = np.empty(k_vectors_use.shape[0], dtype=np.float64)
@@ -1945,7 +2014,6 @@ def charge_dipole_structure_factor_directional(
     dipole_chunk_use = _resolve_chunk_length(dipole_chunk, int(rp.shape[1]))
     k_chunk_use = _resolve_chunk_length(k_chunk, int(k_vectors_use.shape[0]))
     dipole_count = int(rp.shape[1])
-    inv_dipole_count = 1.0 / float(dipole_count)
     box_float = None if box is None else np.asarray(box, dtype=np.float64)
     last_used_dipole_count = 0
     frame_dipole_counts = np.zeros(frame_count, dtype=np.int64)
@@ -1980,6 +2048,26 @@ def charge_dipole_structure_factor_directional(
 
                 if cutoff_sq is None:
                     used_dipoles_mask[:] = True
+                    if small_k_approx:
+                        k_mag_block = k_magnitudes[k0:k1]
+                        q_sum = float(np.sum(z))
+                        q_rproj = np.zeros(k1 - k0, dtype=np.float64)
+                        for q0 in range(0, int(rq_frame.shape[0]), charge_chunk_use):
+                            q1 = min(int(rq_frame.shape[0]), q0 + charge_chunk_use)
+                            q_rproj += np.sum(z[q0:q1, None] * np.matmul(rq_frame[q0:q1], kh_block.T), axis=0)
+
+                        p_weight = np.zeros(k1 - k0, dtype=np.float64)
+                        p_weight_rproj = np.zeros(k1 - k0, dtype=np.float64)
+                        for d0 in range(0, int(rp_frame.shape[0]), dipole_chunk_use):
+                            d1 = min(int(rp_frame.shape[0]), d0 + dipole_chunk_use)
+                            weights = np.matmul(ehat_frame[d0:d1], kh_block.T)
+                            rproj = np.matmul(rp_frame[d0:d1], kh_block.T)
+                            p_weight += np.sum(weights, axis=0)
+                            p_weight_rproj += np.sum(weights * rproj, axis=0)
+
+                        out_re[k0:k1] += -k_mag_block * (q_sum * p_weight_rproj - q_rproj * p_weight)
+                        continue
+
                     q_cos = np.zeros(k1 - k0, dtype=np.float64)
                     q_sin = np.zeros(k1 - k0, dtype=np.float64)
                     for q0 in range(0, int(rq_frame.shape[0]), charge_chunk_use):
@@ -2058,17 +2146,24 @@ def charge_dipole_structure_factor_directional(
                         k1 = min(k_vectors_use.shape[0], k0 + k_chunk_use)
                         k_block = np.asarray(k_vectors_use[k0:k1], dtype=np.float64)
                         kh_block = np.asarray(khat[k0:k1], dtype=np.float64)
-                        charge_phase = np.matmul(charge_position, k_block.T)
+                        if small_k_approx:
+                            charge_projection = np.matmul(charge_position, kh_block.T)
+                        else:
+                            charge_phase = np.matmul(charge_position, k_block.T)
                         for d0 in range(0, int(rp_candidates_all.shape[0]), dipole_chunk_use):
                             d1 = min(int(rp_candidates_all.shape[0]), d0 + dipole_chunk_use)
                             rp_candidates = rp_candidates_all[d0:d1]
                             ehat_candidates = ehat_candidates_all[d0:d1]
-                            dipole_phase = np.matmul(rp_candidates, k_block.T)
                             weights = np.matmul(ehat_candidates, kh_block.T)
-                            phase_diff = dipole_phase - charge_phase[None, :]
-
-                            out_re[k0:k1] += -zq * np.sum(weights * np.sin(phase_diff), axis=0)
-                            out_im[k0:k1] += zq * np.sum(weights * np.cos(phase_diff), axis=0)
+                            if small_k_approx:
+                                dipole_projection = np.matmul(rp_candidates, kh_block.T)
+                                projection_diff = dipole_projection - charge_projection[None, :]
+                                out_re[k0:k1] += -k_magnitudes[k0:k1] * zq * np.sum(weights * projection_diff, axis=0)
+                            else:
+                                dipole_phase = np.matmul(rp_candidates, k_block.T)
+                                phase_diff = dipole_phase - charge_phase[None, :]
+                                out_re[k0:k1] += -zq * np.sum(weights * np.sin(phase_diff), axis=0)
+                                out_im[k0:k1] += zq * np.sum(weights * np.cos(phase_diff), axis=0)
             last_used_dipole_count = int(np.count_nonzero(used_dipoles_mask))
             frame_dipole_counts[frame_index] = last_used_dipole_count
             if status_logger is not None:
@@ -2079,7 +2174,7 @@ def charge_dipole_structure_factor_directional(
                     last_used_dipole_count,
                 )
 
-    scale = inv_dipole_count / float(frame_count) if normalize_by_frames else inv_dipole_count
+    scale = 1.0 / float(frame_count) if normalize_by_frames else 1.0
     out_re *= scale
     out_im *= scale
     if status_logger is not None:
@@ -2109,6 +2204,7 @@ def compute_charge_dipole_structure_factor_from_files(
     Lx: float,
     Ly: float,
     Lz: float,
+    cell_dimensions: Any | None = None,
     shell_width: float,
     cutoff_primary: float | None = None,
     cutoff_secondary: float | None = None,
@@ -2132,6 +2228,7 @@ def compute_charge_dipole_structure_factor_from_files(
     dipole_vectors_io_spec: dict[str, Any] | None = None,
     isotropic_output_io_spec: dict[str, Any] | None = None,
     directional_output_io_spec: dict[str, Any] | None = None,
+    small_k_approx: bool = False,
 ) -> dict[str, Any]:
     overall_start = time.time()
     k_max_primary, k_max_secondary, k_max_tertiary, k_resolution_primary, k_resolution_secondary, k_resolution_tertiary = _resolve_three_tier_k_parameters(
@@ -2142,7 +2239,8 @@ def compute_charge_dipole_structure_factor_from_files(
         k_resolution_secondary,
         k_resolution_tertiary,
     )
-    box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
+    resolved_cell_dimensions = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
+    box = np.array(resolved_cell_dimensions[0], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
     if float(k_max_primary) < 0 or float(k_max_secondary) <= 0 or float(k_max_tertiary) <= 0:
@@ -2221,6 +2319,7 @@ def compute_charge_dipole_structure_factor_from_files(
         res1=float(k_resolution_primary),
         res2=float(k_resolution_secondary),
         res3=float(k_resolution_tertiary),
+        cell_dimensions=resolved_cell_dimensions,
     )
     if k_vectors_array.shape[0] == 0:
         raise ValueError("No charge-dipole k vectors were generated. Increase k max values or verify the box lengths.")
@@ -2248,6 +2347,7 @@ def compute_charge_dipole_structure_factor_from_files(
     print(f"Dipole vectors stride: {int(dipole_vectors_stride)}", flush=True)
     print(f"Isotropic output path: {isotropic_output_file}", flush=True)
     print(f"Directional output path: {directional_output_file}", flush=True)
+    print(f"small-k approximation: {'enabled' if small_k_approx else 'disabled'}", flush=True)
     print(f"k max primary: {float(k_max_primary):.8f}", flush=True)
     print(f"k max secondary: {float(k_max_secondary):.8f}", flush=True)
     print(f"k max tertiary: {float(k_max_tertiary):.8f}", flush=True)
@@ -2398,6 +2498,7 @@ def compute_charge_dipole_structure_factor_from_files(
                 dipole_chunk=dipole_chunk,
                 k_chunk=k_chunk,
                 normalize_by_frames=False,
+                small_k_approx=small_k_approx,
                 status_logger=None,
             )
             directional_values[mask] = tier_values
@@ -2517,6 +2618,7 @@ def compute_charge_dipole_structure_factor_from_files(
         "total_frames": int(total_frames),
         "isotropic_output_file": isotropic_output_path,
         "directional_output_file": directional_output_path,
+        "small_k_approx": bool(small_k_approx),
         "dipoles_count_files": dipoles_count_files,
         "per_file_stats": per_file_stats,
         "isotropic_single_trajectory_reports": isotropic_single_trajectory_reports,
@@ -2560,6 +2662,7 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
         dipole_vectors_io_spec,
         isotropic_output_path,
         isotropic_output_io_spec,
+        small_k_approx,
     ) = args
 
     try:
@@ -2672,6 +2775,7 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
                 dipole_chunk=dipole_chunk,
                 k_chunk=k_chunk,
                 normalize_by_frames=False,
+                small_k_approx=small_k_approx,
                 status_logger=None,
             )
             isotropic_values_total[mask] = tier_total
@@ -2717,6 +2821,7 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
             delete_residue_index=delete_residue_index,
             frame_window=frame_window,
             trajectory_selection=str(file_index),
+            small_k_approx=bool(small_k_approx),
         )
 
         report_path = _write_single_trajectory_output(
@@ -2788,6 +2893,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     Lx: float,
     Ly: float,
     Lz: float,
+    cell_dimensions: Any | None = None,
     cutoff_primary: float | None = None,
     cutoff_secondary: float | None = None,
     cutoff_tertiary: float | None = None,
@@ -2810,6 +2916,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     dipole_positions_io_spec: dict[str, Any] | None = None,
     dipole_vectors_io_spec: dict[str, Any] | None = None,
     isotropic_output_io_spec: dict[str, Any] | None = None,
+    small_k_approx: bool = False,
 ) -> dict[str, Any]:
     overall_start = time.time()
     k_max_primary, k_max_secondary, k_max_tertiary, k_resolution_primary, k_resolution_secondary, k_resolution_tertiary = _resolve_three_tier_k_parameters(
@@ -2820,7 +2927,8 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         k_resolution_secondary,
         k_resolution_tertiary,
     )
-    box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
+    resolved_cell_dimensions = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
+    box = np.array(resolved_cell_dimensions[0], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
     if float(k_max_primary) < 0 or float(k_max_secondary) <= 0 or float(k_max_tertiary) <= 0:
@@ -2899,6 +3007,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         float(k_resolution_primary),
         float(k_resolution_secondary),
         float(k_resolution_tertiary),
+        cell_dimensions=resolved_cell_dimensions,
     )
     if k_magnitudes.shape[0] == 0:
         raise ValueError("No isotropic charge-dipole k magnitudes were generated. Increase k max values or verify the box lengths.")
@@ -2925,6 +3034,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     print(f"Dipole vectors path: {dipole_vectors_pattern}", flush=True)
     print(f"Dipole vectors stride: {int(dipole_vectors_stride)}", flush=True)
     print(f"Isotropic output path: {isotropic_output_file}", flush=True)
+    print(f"small-k approximation: {'enabled' if small_k_approx else 'disabled'}", flush=True)
     print(f"k max primary: {float(k_max_primary):.8f}", flush=True)
     print(f"k max secondary: {float(k_max_secondary):.8f}", flush=True)
     print(f"k max tertiary: {float(k_max_tertiary):.8f}", flush=True)
@@ -3002,6 +3112,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
             dipole_vectors_io_spec,
             isotropic_output_path,
             isotropic_output_io_spec,
+            small_k_approx,
         )
         for file_index, rq_file, rp_file, mu_file in zip(
             selected_file_indices,
@@ -3126,6 +3237,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         delete_residue_index=delete_residue_index,
         frame_window=frame_window,
         trajectory_selection=trajectory_selection,
+        small_k_approx=bool(small_k_approx),
     )
     save_numeric_array(
         isotropic_output_path,
@@ -3151,6 +3263,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         "dipoles_in_cutoff_averages": cutoff_count_averages,
         "total_frames": int(total_frames),
         "isotropic_output_file": isotropic_output_path,
+        "small_k_approx": bool(small_k_approx),
         "dipoles_count_files": dipoles_count_files,
         "per_file_stats": per_file_stats,
         "isotropic_single_trajectory_reports": isotropic_single_trajectory_reports,
@@ -3356,6 +3469,7 @@ def compute_static_structure_factor_from_files(
     Lx: float,
     Ly: float,
     Lz: float,
+    cell_dimensions: Any | None = None,
     shell_width: float,
     cutoff_primary: float | None = None,
     cutoff_secondary: float | None = None,
@@ -3418,7 +3532,8 @@ def compute_static_structure_factor_from_files(
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
     trajectory_indices = _selected_trajectory_indices(len(coordinate_files), num_trajectories, trajectory_selection)
 
-    box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
+    resolved_cell_dimensions = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
+    box = np.array(resolved_cell_dimensions[0], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
 
@@ -3571,6 +3686,7 @@ def compute_directional_structure_factor_from_files(
     Ly: float,
     Lz: float,
     shell_width: float,
+    cell_dimensions: Any | None = None,
     cutoff_primary: float | None = None,
     cutoff_secondary: float | None = None,
     cutoff_tertiary: float | None = None,
@@ -3633,7 +3749,8 @@ def compute_directional_structure_factor_from_files(
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
     trajectory_indices = _selected_trajectory_indices(len(coordinate_files), num_trajectories, trajectory_selection)
 
-    box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
+    resolved_cell_dimensions = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
+    box = np.array(resolved_cell_dimensions[0], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
 
@@ -3648,6 +3765,7 @@ def compute_directional_structure_factor_from_files(
         float(k_resolution_secondary),
         float(k_resolution_tertiary),
         active_axes=active_axes,
+        cell_dimensions=resolved_cell_dimensions,
     )
     if k_vectors_array.shape[0] == 0:
         raise ValueError("No directional k vectors were generated. Increase the k Max values or verify the selected directions.")
@@ -3788,6 +3906,7 @@ def compute_k_component_structure_factors_from_files(
     Lx: float,
     Ly: float,
     Lz: float,
+    cell_dimensions: Any | None = None,
     shell_width: float,
     cutoff_primary: float | None = None,
     cutoff_secondary: float | None = None,
@@ -3818,7 +3937,8 @@ def compute_k_component_structure_factors_from_files(
     components = parse_k_component_selection(components_selection)
     coordinate_files = _discover_coordinate_files(baseDir, coords_pattern)
     trajectory_indices = _selected_trajectory_indices(len(coordinate_files), num_trajectories, trajectory_selection)
-    box = np.array([float(Lx), float(Ly), float(Lz)], dtype=np.float64)
+    resolved_cell_dimensions = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
+    box = np.array(resolved_cell_dimensions[0], dtype=np.float64)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
     if k_max_primary < 0 or k_max_secondary <= 0 or k_max_tertiary <= 0:
@@ -3865,6 +3985,7 @@ def compute_k_component_structure_factors_from_files(
             float(k_resolution_secondary),
             float(k_resolution_tertiary),
             active_axes=axes,
+            cell_dimensions=resolved_cell_dimensions,
         )
         if k_vectors_array.shape[0] == 0:
             raise ValueError(f"No k vectors were generated for component selection {label}.")

@@ -2,6 +2,7 @@
 
 [<img src="app_images/button_prep_run.svg" alt="Prep. Run" width="220">](Run_Prep.md) Download, setup, and launch steps.<br>
 [<img src="app_images/button_user_manual.svg" alt="User Manual" width="220">](Manual.md) Module-by-module usage guide.<br>
+[<img src="app_images/button_calc_details.svg" alt="Calc. Details" width="220">](detailed_readme.md) Scientific definitions, formulas, and calculation conventions.<br>
 [<img src="app_images/button_citation.svg" alt="Citation" width="220">](CITATION.md) Reference information for citing the software.
 
 ADMDynAnlz is a graphical workflow tool for post-processing molecular dynamics trajectories and generating analysis-ready workflows for transport and dynamical observables.
@@ -257,6 +258,12 @@ The generated workflows write the requested density `S(k)` or charge-dipole `Sqp
   </picture>
 </p>
 
+Charge-dipole calculations include directional, isotropic, and optional small-k approximation modes. The full formulas and sign conventions are documented in [detailed_readme.md](detailed_readme.md).
+
+## Documentation
+
+- Full user manual: [Manual.md](Manual.md)
+- Scientific details and equations: [detailed_readme.md](detailed_readme.md)
 
 ## Citation
 
