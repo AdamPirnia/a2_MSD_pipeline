@@ -222,8 +222,13 @@ For isotropic density calculations, the pair-distance expression is:
 $$
 S(k) =
 1+\frac{2}{N}
-\sum_{i<j}
-\frac{\sin(k r_{ij})}{k r_{ij}}
+\sum_{i<j}\operatorname{sinc}(k r_{ij})
+$$
+
+with
+
+$$
+\operatorname{sinc}(x)=\frac{\sin x}{x}
 $$
 
 The reciprocal vector components are generated from the orthorhombic cell:
