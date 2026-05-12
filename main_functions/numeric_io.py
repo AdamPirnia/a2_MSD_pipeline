@@ -106,6 +106,7 @@ def load_numeric_array(
     default_mode: str,
     default_precision: str,
     default_decimals: int | None = None,
+    mmap_mode: str | None = None,
 ) -> np.ndarray:
     io_spec = normalize_io_spec(
         spec,
@@ -115,8 +116,11 @@ def load_numeric_array(
     )
     if io_spec["mode"] == "binary":
         try:
-            with open(input_file, "rb") as fh:
-                data = np.load(fh, allow_pickle=False)
+            if mmap_mode:
+                data = np.load(input_file, allow_pickle=False, mmap_mode=mmap_mode)
+            else:
+                with open(input_file, "rb") as fh:
+                    data = np.load(fh, allow_pickle=False)
         except Exception as exc:
             raise ValueError(f"Input file must be binary NumPy format: {input_file}") from exc
     else:

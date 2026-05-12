@@ -3,23 +3,21 @@ import subprocess
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
+import struct
 from difflib import get_close_matches
 import numpy as np
 try:
     from .numeric_io import (
         DEFAULT_DOUBLE_DECIMALS,
         DEFAULT_SINGLE_DECIMALS,
-        load_numeric_array,
-        save_numeric_array,
     )
 except ImportError:
     from numeric_io import (
         DEFAULT_DOUBLE_DECIMALS,
         DEFAULT_SINGLE_DECIMALS,
-        load_numeric_array,
-        save_numeric_array,
     )
 import re
+from collections import deque
 # Inlined path_utils functions to keep generated/runtime scripts self-contained
 _SAFE_INDEX_EXPR = re.compile(r"^i(?:\s*[+\-*/]\s*\d+)?$")
 
@@ -135,6 +133,56 @@ def _normalize_output_io_spec(output_io_spec):
     return {"mode": mode, "precision": precision, "decimals": decimals}
 
 
+def _raw_binary_output_path(output_file):
+    return f"{output_file}.rawf32"
+
+
+def _raw_binary_shape_path(output_file):
+    return f"{output_file}.shape"
+
+
+def _vmd_coordinate_temp_path(output_file):
+    return f"{output_file}.vmdtmp.bin"
+
+
+def _npy_writing_path(output_file):
+    return f"{output_file}.writing.npy"
+
+
+def _coords_status_path(common_term, index):
+    suffix = f"{common_term}_{index}" if common_term else str(index)
+    return os.path.join("logs", f"coords_status_{suffix}.log")
+
+
+def _cleanup_binary_coordinate_temp_files(output_file):
+    for temp_file in (
+        _vmd_coordinate_temp_path(output_file),
+        _raw_binary_output_path(output_file),
+        _raw_binary_shape_path(output_file),
+        _npy_writing_path(output_file),
+        f"{output_file}.writing",
+    ):
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except OSError:
+            pass
+
+
+def _vmd_temp_dtype_for_spec(output_io_spec):
+    precision = str(output_io_spec.get("precision") or "single").lower()
+    if precision == "single":
+        return {"label": "f4", "tcl_format": "r3", "dtype": np.float32}
+    return {"label": "f8", "tcl_format": "d3", "dtype": np.float64}
+
+
+def _output_dtype_for_spec(output_io_spec):
+    precision = str(output_io_spec.get("precision") or "single").lower()
+    if precision == "single":
+        return np.float32
+    return np.float64
+
+
 def _text_format_string(io_spec):
     if io_spec["precision"] == "double":
         decimals = DEFAULT_DOUBLE_DECIMALS
@@ -145,73 +193,169 @@ def _text_format_string(io_spec):
     return f"%.{decimals}f"
 
 
-def _raw_binary_output_path(output_file):
-    return f"{output_file}.rawf32"
+def _read_dcd_frame_count(dcd_file):
+    """Read the frame count from a standard DCD header without loading coordinates."""
+    with open(dcd_file, "rb") as handle:
+        first_record = handle.read(4)
+        if len(first_record) != 4:
+            raise ValueError(f"DCD header is too short: {dcd_file}")
+
+        record_size = struct.unpack("<i", first_record)[0]
+        endian = "<"
+        if record_size != 84:
+            record_size = struct.unpack(">i", first_record)[0]
+            endian = ">"
+        if record_size != 84:
+            raise ValueError(f"Unsupported DCD header record size in {dcd_file}: {record_size}")
+
+        magic = handle.read(4)
+        if magic not in {b"CORD", b"VELD"}:
+            raise ValueError(f"Unsupported DCD magic {magic!r} in {dcd_file}")
+
+        nset_bytes = handle.read(4)
+        if len(nset_bytes) != 4:
+            raise ValueError(f"DCD frame count is missing from header: {dcd_file}")
+
+    n_frames = struct.unpack(f"{endian}i", nset_bytes)[0]
+    if n_frames <= 0:
+        raise ValueError(f"DCD header reports an invalid frame count ({n_frames}): {dcd_file}")
+    return n_frames
 
 
-def _raw_binary_shape_path(output_file):
-    return f"{output_file}.shape"
-
-
-def _finalize_binary_coordinate_output(output_file, output_io_spec):
-    """Convert VMD raw float32 output plus shape metadata into the requested final file."""
-    raw_output_file = _raw_binary_output_path(output_file)
-    shape_file = _raw_binary_shape_path(output_file)
-
-    if not os.path.exists(raw_output_file):
-        # Backward compatibility for older runs that may have written the final file directly.
-        if os.path.exists(output_file):
-            load_numeric_array(
-                output_file,
-                {"mode": "binary", "precision": "single"},
-                default_mode="binary",
-                default_precision="single",
-            )
-            return
-        raise FileNotFoundError(f"Raw binary coordinate output not found: {raw_output_file}")
-
-    if not os.path.exists(shape_file):
-        raise FileNotFoundError(f"Binary coordinate shape metadata not found: {shape_file}")
-
-    raw_size = os.path.getsize(raw_output_file)
-    shape_size = os.path.getsize(shape_file)
-    if raw_size <= 0 or shape_size <= 0:
-        raise ValueError(
-            "VMD completed without writing coordinate payload data. "
-            f"raw bytes={raw_size}, shape bytes={shape_size}. "
-            "This usually means the VMD launcher exited without running the Tcl batch script correctly. "
-            "On macOS, prefer the real VMD executable inside the app bundle instead of startup.command.csh."
-        )
-
-    with open(shape_file, "r", encoding="utf-8") as handle:
-        shape_tokens = handle.read().strip().split()
-    if len(shape_tokens) != 2:
-        raise ValueError(f"Invalid binary coordinate shape metadata in {shape_file}")
-
+def _read_status_tail(status_path, max_lines=20):
+    if not os.path.exists(status_path):
+        return ""
     try:
-        n_frames, n_columns = (int(shape_tokens[0]), int(shape_tokens[1]))
+        with open(status_path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = deque(handle, maxlen=max_lines)
+    except OSError:
+        return ""
+    return "".join(lines).strip()
+
+
+def _format_status_tail(status_path):
+    tail = _read_status_tail(status_path)
+    if not tail:
+        return f"No VMD status file was written at {status_path}."
+    return f"Last VMD status lines from {status_path}:\n{tail}"
+
+
+def _read_vmd_temp_coordinate_header(handle, temp_file):
+    header_start = handle.tell()
+    header_line = handle.readline(256)
+    header_end = handle.tell()
+    if not header_line.endswith(b"\n"):
+        raise ValueError(f"Invalid or truncated VMD coordinate temp header in {temp_file}")
+    header = header_line.decode("ascii", errors="replace").strip().split()
+    if len(header) != 4 or header[0] != "ADMDYNANLZ_COORD_BIN_V1":
+        raise ValueError(f"Invalid VMD coordinate temp header in {temp_file}")
+
+    dtype_token = header[1]
+    try:
+        n_frames = int(header[2])
+        n_columns = int(header[3])
     except ValueError as exc:
-        raise ValueError(f"Non-integer shape metadata in {shape_file}") from exc
+        raise ValueError(f"Invalid VMD coordinate temp shape in {temp_file}") from exc
 
-    data = np.fromfile(raw_output_file, dtype=np.float32)
-    expected_size = n_frames * n_columns
-    if data.size != expected_size:
-        raise ValueError(
-            f"Raw binary coordinate size mismatch for {raw_output_file}: "
-            f"expected {expected_size} float32 values, found {data.size}"
-        )
+    if dtype_token == "f4":
+        dtype = np.float32
+    elif dtype_token == "f8":
+        dtype = np.float64
+    else:
+        raise ValueError(f"Unsupported VMD coordinate temp dtype {dtype_token!r} in {temp_file}")
 
-    data = data.reshape(n_frames, n_columns)
-    save_numeric_array(
-        output_file,
-        data,
-        output_io_spec,
-        default_mode="binary",
-        default_precision="single",
-    )
+    if n_frames <= 0 or n_columns <= 0:
+        raise ValueError(f"VMD coordinate temp has invalid shape ({n_frames}, {n_columns}): {temp_file}")
 
-    os.remove(raw_output_file)
-    os.remove(shape_file)
+    return dtype, n_frames, n_columns, header_end - header_start
+
+
+def _stream_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec):
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+
+    with open(temp_file, "rb") as handle:
+        temp_dtype, n_frames, n_columns, header_bytes = _read_vmd_temp_coordinate_header(handle, temp_file)
+        payload_bytes = os.path.getsize(temp_file) - header_bytes
+        expected_values = n_frames * n_columns
+        expected_bytes = expected_values * np.dtype(temp_dtype).itemsize
+        if payload_bytes != expected_bytes:
+            found_values = payload_bytes // np.dtype(temp_dtype).itemsize
+            raise ValueError(
+                f"VMD coordinate temp size mismatch for {temp_file}: "
+                f"expected {expected_values} values, found {found_values}"
+            )
+
+        output_dtype = _output_dtype_for_spec(output_io_spec)
+        chunk_rows = os.environ.get("ADMDYNANLZ_CONVERT_CHUNK_ROWS", "8")
+        try:
+            chunk_rows = max(1, int(chunk_rows))
+        except ValueError:
+            chunk_rows = 8
+
+        if output_io_spec["mode"] == "binary":
+            temp_output_file = _npy_writing_path(output_file)
+            if os.path.exists(temp_output_file):
+                os.remove(temp_output_file)
+            array = np.lib.format.open_memmap(
+                temp_output_file,
+                mode="w+",
+                dtype=output_dtype,
+                shape=(n_frames, n_columns),
+            )
+            for row_start in range(0, n_frames, chunk_rows):
+                rows = min(chunk_rows, n_frames - row_start)
+                chunk = np.fromfile(handle, dtype=temp_dtype, count=rows * n_columns)
+                if chunk.size != rows * n_columns:
+                    raise ValueError(f"Unexpected EOF while reading VMD coordinate temp output: {temp_file}")
+                chunk = chunk.reshape(rows, n_columns)
+                if output_io_spec["precision"] == "custom":
+                    chunk = np.round(chunk.astype(output_dtype, copy=False), int(output_io_spec["decimals"]))
+                elif chunk.dtype != output_dtype:
+                    chunk = chunk.astype(output_dtype, copy=False)
+                array[row_start:row_start + rows, :] = chunk
+            array.flush()
+            del array
+            os.replace(temp_output_file, output_file)
+            return
+
+        temp_output_file = f"{output_file}.writing"
+        fmt = _text_format_string(output_io_spec)
+        with open(temp_output_file, "w", encoding="utf-8") as out_handle:
+            for _ in range(n_frames):
+                chunk = np.fromfile(handle, dtype=temp_dtype, count=n_columns)
+                if chunk.size != n_columns:
+                    raise ValueError(f"Unexpected EOF while reading VMD coordinate temp output: {temp_file}")
+                if output_io_spec["precision"] == "custom":
+                    chunk = np.round(chunk.astype(output_dtype, copy=False), int(output_io_spec["decimals"]))
+                elif chunk.dtype != output_dtype:
+                    chunk = chunk.astype(output_dtype, copy=False)
+                np.savetxt(out_handle, chunk.reshape(1, n_columns), fmt=fmt, delimiter=" ")
+        os.replace(temp_output_file, output_file)
+
+
+def _finalize_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec, min_temp_mtime=None, status_path=None, wait_seconds=60):
+    deadline = time.time() + max(0, wait_seconds)
+    last_error = None
+    while True:
+        try:
+            if not os.path.exists(temp_file):
+                raise FileNotFoundError(f"VMD coordinate temp output not found: {temp_file}")
+            if min_temp_mtime is not None and os.path.getmtime(temp_file) < min_temp_mtime:
+                raise FileNotFoundError(f"VMD did not update coordinate temp output: {temp_file}")
+            if os.path.getsize(temp_file) <= 0:
+                raise ValueError(f"VMD wrote an empty coordinate temp output file: {temp_file}")
+            _stream_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec)
+            os.remove(temp_file)
+            return
+        except Exception as exc:
+            last_error = exc
+            if time.time() >= deadline:
+                details = _format_status_tail(status_path) if status_path else ""
+                if details:
+                    raise type(last_error)(f"{last_error}\n{details}") from last_error
+                raise last_error
+            time.sleep(1)
+
 
 def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, save_com=False, grouping_unit="residue", vmd=None, max_workers=None, dcd_indices=None, common_term="", stride=1, wrap_settings=None, output_io_spec=None):
     """
@@ -546,12 +690,14 @@ def _write_tcl_script(
     psf_full_path = os.path.join(baseDir, psf_path)
     dcd_full_path = os.path.join(baseDir, dcd_path)
     output_full_path = os.path.join(baseDir, output_path)
+    dcd_frame_count = _read_dcd_frame_count(dcd_full_path)
     
     print(f"DEBUG TCL Script {i}:")
     print(f"  Output pattern: {output_pattern}")
     print(f"  Expanded output: {output_path}")
     print(f"  Full output path: {output_full_path}")
     print(f"  Output directory: {os.path.dirname(output_full_path)}")
+    print(f"  DCD frames: {dcd_frame_count}")
     
     # Ensure output directory exists before creating TCL script
     output_dir = os.path.dirname(output_full_path)
@@ -560,6 +706,7 @@ def _write_tcl_script(
     
     # Create more specific TCL filename with common term
     tcl_filename = f"coords_{common_term}_{i}.tcl" if common_term else f"coords_{i}.tcl"
+    status_path = _coords_status_path(common_term, i)
 
     wrap_settings = wrap_settings or {}
     normalized_output = _normalize_output_io_spec(output_io_spec)
@@ -577,8 +724,7 @@ def _write_tcl_script(
             "",
             "# Load pbctools and wrap coordinates before extraction",
             "if {[catch {package require pbctools} pbctools_err]} {",
-            '    puts "ERROR: Failed to load pbctools package: $pbctools_err"',
-            "    exit 1",
+            '    abort_with_error "Failed to load pbctools package: $pbctools_err"',
             "}",
             "set wrap_args [list -molid $molid -now]",
         ])
@@ -605,65 +751,36 @@ def _write_tcl_script(
         ])
 
     wrap_block = "\n".join(wrap_lines)
-    text_output = normalized_output["mode"] == "text"
-    text_format = _text_format_string(normalized_output)
-
-    if text_output:
-        output_header_block = ""
-        output_open_block = f'set outfile [open "{_tcl_quote(output_full_path)}" w]'
-        if save_com:
-            output_frame_block = f"""
-    set line_parts [list]
-    foreach group_sel $group_sels {{
-        $group_sel frame $frame
-        set center [measure center $group_sel weight mass]
-        foreach value $center {{
-            lappend line_parts [format "{text_format}" $value]
-        }}
-    }}
-    puts $outfile [join $line_parts " "]
-"""
-            output_summary_label = "Text COM output written to"
-        else:
-            output_frame_block = f"""
-    $sel frame $frame
-    set coords [$sel get {{x y z}}]
-    set line_parts [list]
-    foreach coord $coords {{
-        foreach value $coord {{
-            lappend line_parts [format "{text_format}" $value]
-        }}
-    }}
-    puts $outfile [join $line_parts " "]
-"""
-            output_summary_label = "Text output written to"
+    temp_output_full_path = _vmd_coordinate_temp_path(output_full_path)
+    temp_dtype = _vmd_temp_dtype_for_spec(normalized_output)
+    try:
+        frame_batch_size = max(1, int(os.environ.get("ADMDYNANLZ_VMD_FRAME_BATCH_SIZE", "25")))
+    except ValueError:
+        frame_batch_size = 25
+    output_open_block = "\n".join([
+        f'set outfile [open "{_tcl_quote(temp_output_full_path)}" w]',
+        "fconfigure $outfile -translation binary -encoding binary",
+    ])
+    if save_com:
+        column_expr = "$num_groups * 3"
     else:
-        raw_binary_path = _raw_binary_output_path(output_full_path)
-        binary_shape_path = _raw_binary_shape_path(output_full_path)
-        output_open_block = "\n".join([
-            f'set outfile [open "{_tcl_quote(raw_binary_path)}" w]',
-            "fconfigure $outfile -translation binary -encoding binary",
-        ])
-        if save_com:
-            column_expr = "$num_groups * 3"
-        else:
-            column_expr = "$num_atoms * 3"
-        output_header_block = f"""
-# Persist raw float32 coordinates and let Python finalize the NumPy container.
+        column_expr = "$num_atoms * 3"
+    output_header_block = f"""
+# VMD writes a simple temporary .bin file; Python converts it to the requested final format.
+set vmd_payload_format "{_tcl_quote(temp_dtype["tcl_format"])}"
 set output_frames [expr {{($num_frames + $stride - 1) / $stride}}]
 set num_columns [expr {{{column_expr}}}]
-set shapefile [open "{_tcl_quote(binary_shape_path)}" w]
-puts $shapefile "$output_frames $num_columns"
-close $shapefile
+puts $outfile "ADMDYNANLZ_COORD_BIN_V1 {_tcl_quote(temp_dtype["label"])} $output_frames $num_columns"
+status "opened temp output {_tcl_quote(temp_output_full_path)} with $output_frames frame(s), $num_columns column(s)"
 """
-        if save_com:
-            output_frame_block = """
+    if save_com:
+        output_frame_block = """
     set binary_chunk ""
     set chunk_groups 0
     foreach group_sel $group_sels {
         $group_sel frame $frame
         set center [measure center $group_sel weight mass]
-        append binary_chunk [binary format r3 $center]
+        append binary_chunk [binary format $vmd_payload_format $center]
         incr chunk_groups
         if {$chunk_groups >= 4096} {
             puts -nonewline $outfile $binary_chunk
@@ -675,17 +792,17 @@ close $shapefile
         puts -nonewline $outfile $binary_chunk
     }
 """
-            output_summary_label = "Raw binary COM output written to"
-        else:
-            output_frame_block = """
+        output_summary_label = "VMD temp binary COM output written to"
+    else:
+        output_frame_block = """
     $sel frame $frame
     set coords [$sel get {x y z}]
     
-    # Stream binary float32 output in chunks to avoid building enormous Tcl objects
+    # Stream binary output in chunks to avoid building enormous Tcl objects
     set binary_chunk ""
     set chunk_atoms 0
     foreach coord $coords {
-        append binary_chunk [binary format r3 $coord]
+        append binary_chunk [binary format $vmd_payload_format $coord]
         incr chunk_atoms
         if {$chunk_atoms >= 4096} {
             puts -nonewline $outfile $binary_chunk
@@ -697,13 +814,13 @@ close $shapefile
         puts -nonewline $outfile $binary_chunk
     }
 """
-            output_summary_label = "Raw binary coordinate output written to"
+        output_summary_label = "VMD temp binary coordinate output written to"
 
     if save_com:
         group_setup_block = f"""
 set grouping_unit "{_tcl_quote(grouping_unit)}"
 set atom_indices [$sel get index]
-set atom_groups [$sel get {grouping_unit}]
+set atom_groups [$sel get $grouping_unit]
 set group_order [list]
 set grouped_indices [dict create]
 foreach atom_index $atom_indices group_value $atom_groups {{
@@ -723,8 +840,7 @@ foreach group_key $group_order {{
 set num_groups [llength $group_sels]
 puts "Resolved $num_groups COM group(s) using $grouping_unit"
 if {{$num_groups == 0}} {{
-    puts "ERROR: No COM groups were resolved from the selected atoms"
-    exit 1
+    abort_with_error "No COM groups were resolved from the selected atoms"
 }}
 """
     else:
@@ -737,11 +853,22 @@ if {{$num_groups == 0}} {{
 puts "Starting coordinate extraction for chunk {i}"
 puts "Timestamp: [clock format [clock seconds]]"
 
+set ::coords_statusfile [open "{_tcl_quote(status_path)}" w]
+proc status {{message}} {{
+    global coords_statusfile
+    puts $coords_statusfile "[clock format [clock seconds]] $message"
+    flush $coords_statusfile
+}}
+proc abort_with_error {{message}} {{
+    status "ERROR: $message"
+    puts "ERROR: $message"
+    error $message
+}}
+status "script started for chunk {i}"
+
+set __coords_status [catch {{
 # Set paths
 set baseDir "{_tcl_quote(baseDir)}"
-
-# Open output file
-{output_open_block}
 
 # Load trajectory
 set PSF "{_tcl_quote(psf_full_path)}"
@@ -753,47 +880,70 @@ puts "Loading DCD: $DCD"
 # Debug output - check file existence
 puts "About to load: PSF=$PSF, DCD=$DCD"
 if {{![file exists $PSF]}} {{
-    puts "ERROR: PSF file does not exist: $PSF"
-    exit 1
+    abort_with_error "PSF file does not exist: $PSF"
 }}
 if {{![file exists $DCD]}} {{
-    puts "ERROR: DCD file does not exist: $DCD"
-    exit 1
+    abort_with_error "DCD file does not exist: $DCD"
 }}
 
-set molid [mol load psf $PSF dcd $DCD]
-puts "Molecule loaded with ID: $molid"
+set molid [mol new $PSF type psf waitfor all]
+mol top $molid
+puts "Molecule topology loaded with ID: $molid"
+status "molecule topology loaded with ID $molid"
 
 # Get number of frames
-set num_frames [molinfo $molid get numframes]
+set num_frames {dcd_frame_count}
 puts "Total frames: $num_frames"
+status "trajectory has $num_frames frame(s)"
 set stride {stride}
+set frame_batch_size {frame_batch_size}
 {wrap_block}
 
 # Create selection
 set sel [atomselect $molid "{_tcl_quote(target_selection)}"]
 set num_atoms [$sel num]
 puts "Selected $num_atoms atoms"
+status "selected $num_atoms atom(s)"
 
 if {{$num_atoms == 0}} {{
-    puts "ERROR: No atoms selected with criteria '{target_selection}'"
-    exit 1
+    abort_with_error "No atoms selected with criteria '{_tcl_quote(target_selection)}'"
 }}
 
 {group_setup_block}
+{output_open_block}
 {output_header_block}
 
 # Extract coordinates for all frames
 puts "Extracting coordinates..."
+catch {{animate delete all}}
 set frame_count 0
-for {{set frame 0}} {{$frame < $num_frames}} {{incr frame $stride}} {{
+for {{set batch_start 0}} {{$batch_start < $num_frames}} {{incr batch_start [expr {{$stride * $frame_batch_size}}]}} {{
+    set batch_end [expr {{$batch_start + (($frame_batch_size - 1) * $stride)}}]
+    if {{$batch_end >= $num_frames}} {{
+        set batch_end [expr {{$num_frames - 1}}]
+    }}
+    puts "Reading DCD frames $batch_start to $batch_end with stride $stride"
+    status "reading DCD frames $batch_start to $batch_end with stride $stride"
+    if {{[catch {{mol addfile $DCD type dcd first $batch_start last $batch_end step $stride waitfor all molid $molid}} read_err]}} {{
+        abort_with_error "failed to read DCD frames $batch_start to $batch_end: $read_err"
+    }}
+    set loaded_frames [molinfo $molid get numframes]
+    set expected_batch_frames [expr {{(($batch_end - $batch_start) / $stride) + 1}}]
+    if {{$loaded_frames <= 0}} {{
+        abort_with_error "VMD loaded zero frames from DCD batch $batch_start to $batch_end"
+    }}
+    if {{$loaded_frames != $expected_batch_frames}} {{
+        abort_with_error "VMD loaded $loaded_frames frame(s) from DCD batch $batch_start to $batch_end, expected $expected_batch_frames"
+    }}
+    for {{set local_frame 0}} {{$local_frame < $loaded_frames}} {{incr local_frame}} {{
+    set frame $local_frame
+    set actual_frame [expr {{$batch_start + ($local_frame * $stride)}}]
     animate goto $frame
 """)
         if wrap_enabled:
             f.write(f"""
     if {{[catch {{eval pbc wrap $wrap_args}} wrap_err]}} {{
-        puts "ERROR: pbc wrap failed at frame $frame: $wrap_err"
-        exit 1
+        abort_with_error "pbc wrap failed at frame $actual_frame: $wrap_err"
     }}
 """)
         f.write(f"""
@@ -803,6 +953,8 @@ for {{set frame 0}} {{$frame < $num_frames}} {{incr frame $stride}} {{
     if {{$frame_count % 100 == 0}} {{
         puts "Processed $frame_count frames..."
     }}
+    }}
+    catch {{animate delete all}}
 }}
 
 $sel delete
@@ -812,12 +964,24 @@ if {{[info exists group_sels]}} {{
     }}
 }}
 close $outfile
+status "closed output file"
 mol delete $molid
 
 puts "Extraction complete: $frame_count frames processed"
 puts "{output_summary_label}: {output_full_path}"
+status "extraction complete: $frame_count frame(s) processed"
 puts "Timestamp: [clock format [clock seconds]]"
+}} __coords_error]
 
+if {{$__coords_status != 0}} {{
+    status "ERROR: $__coords_error"
+    catch {{close $outfile}}
+    catch {{mol delete $molid}}
+    catch {{close $::coords_statusfile}}
+    exit 1
+}}
+
+catch {{close $::coords_statusfile}}
 exit 0
 """)
     
@@ -831,6 +995,16 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
     tcl_filename = f"coords_{common_term}_{index}.tcl" if common_term else f"coords_{index}.tcl"
     script_path = f"writenCodes/{tcl_filename}"
     log_path = f"logs/log_{index}.log"
+    output_file = os.path.join(baseDir, expand_path_pattern(output_pattern, common_term, index))
+    temp_output_file = _vmd_coordinate_temp_path(output_file)
+    status_path = _coords_status_path(common_term, index)
+    normalized_output = _normalize_output_io_spec(output_io_spec)
+    _cleanup_binary_coordinate_temp_files(output_file)
+    try:
+        if os.path.exists(status_path):
+            os.remove(status_path)
+    except OSError:
+        pass
     
     # Build VMD command - ensure proper quoting for paths with spaces.
     # Some VMD builds do not support "-nt" and treat the following value as an
@@ -843,6 +1017,7 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
     
     try:
         # Run VMD process
+        run_started_at = time.time()
         process = subprocess.run(
             command, 
             shell=False,
@@ -851,21 +1026,24 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
             timeout=None  # No timeout for large trajectories
         )
         
-        def write_vmd_log(extra_error=None):
+        def write_vmd_log(extra_error=None, extra_warning=None):
             with open(log_path, 'w') as log_file:
                 log_file.write(f"Command: {' '.join(command)}\n")
                 log_file.write(f"Return code: {process.returncode}\n")
                 if extra_error:
                     log_file.write(f"Detected error: {extra_error}\n")
+                if extra_warning:
+                    log_file.write(f"Warning: {extra_warning}\n")
                 log_file.write(f"STDOUT:\n{process.stdout}\n")
                 log_file.write(f"STDERR:\n{process.stderr}\n")
 
         # Save log file
         write_vmd_log()
 
+        combined_output = process.stdout + "\n" + process.stderr
         tcl_errors = [
             line.strip()
-            for line in (process.stdout + "\n" + process.stderr).splitlines()
+            for line in combined_output.splitlines()
             if line.strip().startswith("ERROR:")
         ]
         if tcl_errors:
@@ -874,16 +1052,28 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
             return False, process.stdout, error_msg
 
         success = process.returncode == 0
+        completion_warning = None
+        if success and "Extraction complete:" not in combined_output:
+            completion_warning = (
+                "VMD returned code 0, but the coordinate Tcl completion message was not captured. "
+                "Continuing with output-file validation."
+            )
+
         if success:
-            output_file = os.path.join(baseDir, expand_path_pattern(output_pattern, common_term, index))
-            normalized_output = _normalize_output_io_spec(output_io_spec)
-            if normalized_output["mode"] == "binary":
-                try:
-                    _finalize_binary_coordinate_output(output_file, normalized_output)
-                except Exception as e:
-                    error_msg = f"Post-processing VMD coordinate output failed: {e}"
-                    write_vmd_log(error_msg)
-                    return False, process.stdout, error_msg
+            try:
+                _finalize_vmd_temp_coordinate_output(
+                    temp_output_file,
+                    output_file,
+                    normalized_output,
+                    min_temp_mtime=run_started_at,
+                    status_path=status_path,
+                )
+            except Exception as e:
+                error_msg = f"Converting VMD coordinate temp output failed: {e}"
+                write_vmd_log(error_msg)
+                return False, process.stdout, error_msg
+        if completion_warning:
+            write_vmd_log(extra_warning=completion_warning)
         return success, process.stdout, process.stderr
         
     except subprocess.TimeoutExpired:

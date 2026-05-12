@@ -64,14 +64,17 @@ def validate_path_pattern(pattern):
     return True, ""
 
 
-def _load_coordinate_array(input_file, dtype=np.float64, io_spec=None):
+def _load_coordinate_array(input_file, dtype=np.float64, io_spec=None, mmap_mode=None):
     """Load coordinate data using the configured storage mode and precision."""
     data = load_numeric_array(
         input_file,
         io_spec,
         default_mode="binary",
         default_precision="single",
+        mmap_mode=mmap_mode,
     )
+    if mmap_mode:
+        return np.asarray(data)
     return np.asarray(data, dtype=dtype)
 
 
@@ -268,7 +271,7 @@ def _build_legacy_com_metadata(prtcl_num, prtcl_atoms, particl_mass):
 
 ######################################################    Parameters    
 
-def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, target_selection=None, vmd_path=None, calc_mode="individual", grouping_unit="residue", max_workers=None, use_memmap=False, dcd_indices=None, common_term="", input_io_spec=None, output_io_spec=None, prtcl_num=None, prtcl_atoms=None, particl_mass=None):
+def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, target_selection=None, vmd_path=None, calc_mode="individual", grouping_unit="residue", max_workers=None, use_memmap=False, chunk_size=None, dcd_indices=None, common_term="", input_io_spec=None, output_io_spec=None, prtcl_num=None, prtcl_atoms=None, particl_mass=None):
     """
     Compute and save per-frame center-of-mass coordinates from extracted atomic coordinates.
 
@@ -303,6 +306,9 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, targ
         Maximum number of parallel workers. Defaults to min(num_dcd, CPU count).
     use_memmap : bool, optional
         Use memory mapping for very large files to reduce RAM usage.
+    chunk_size : int, optional
+        Number of frames to process at once inside each worker. If None, an
+        automatic chunk size is selected from the input frame count.
     dcd_indices : list, optional
         List of DCD indices to process (e.g., [0, 1, 4, 5] to process only DCDs 0, 1, 4, 5).
         If None, processes all DCDs from 0 to num_dcd-1. Default is None.
@@ -410,10 +416,11 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, targ
         'failed': [],
         'total_time': 0,
         'parallel_workers': max_workers,
-        'use_memmap': use_memmap
+        'use_memmap': use_memmap,
+        'chunk_size': chunk_size
     }
     
-    print(f"Using {max_workers} workers, memmap: {use_memmap}")
+    print(f"Using {max_workers} workers, memmap: {use_memmap}, chunk size: {chunk_size or 'auto'}")
     
     if max_workers == 1:
         # Sequential processing
@@ -421,7 +428,7 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, targ
             try:
                 _compute_com_single_file(
                     i, baseDir, input_pattern, output_pattern, com_metadata,
-                    use_memmap, common_term, input_io_spec, output_io_spec
+                    use_memmap, chunk_size, common_term, input_io_spec, output_io_spec
                 )
                 results['success'] += 1
                 if i % 10 == 0 or i == len(dcd_list) - 1:
@@ -437,7 +444,7 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, targ
                 executor.submit(
                     _compute_com_single_file,
                     i, baseDir, input_pattern, output_pattern, com_metadata,
-                    use_memmap, common_term, input_io_spec, output_io_spec
+                    use_memmap, chunk_size, common_term, input_io_spec, output_io_spec
                 ): i 
                 for i in dcd_list
             }
@@ -526,7 +533,21 @@ def _validate_com_shapes(baseDir, output_pattern, sample_indices, expected_colum
             print(result)
 
 
-def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern, com_metadata, use_memmap, common_term="", input_io_spec=None, output_io_spec=None):
+def _normalize_chunk_size(chunk_size, n_frames):
+    if chunk_size is None or str(chunk_size).strip().lower() in {"", "auto"}:
+        if n_frames <= 1000:
+            return n_frames
+        return min(n_frames, max(1000, n_frames // 4))
+    try:
+        value = int(chunk_size)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Step 3 chunk size must be an integer >= 1 or 'auto'") from exc
+    if value < 1:
+        raise ValueError("Step 3 chunk size must be >= 1")
+    return min(value, n_frames)
+
+
+def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern, com_metadata, use_memmap, chunk_size=None, common_term="", input_io_spec=None, output_io_spec=None):
     """Compute center-of-mass for a single trajectory file with optimized memory usage."""
     
     # Expand patterns to get actual file paths
@@ -542,10 +563,8 @@ def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern,
     try:
         # Load coordinate data efficiently
         if use_memmap:
-            # Memory-mapped loading for very large files
-            data = _load_coordinate_array(input_file, dtype=np.float32, io_spec=input_io_spec)  # Use float32 to save memory
+            data = _load_coordinate_array(input_file, dtype=np.float32, io_spec=input_io_spec, mmap_mode="r")
         else:
-            # Standard loading
             data = _load_coordinate_array(input_file, dtype=np.float64, io_spec=input_io_spec)
         
         if data.ndim == 1:
@@ -560,16 +579,22 @@ def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern,
             )
 
         atom_coords = data.reshape(n_frames, com_metadata["atom_count"], 3)
-        centers_of_mass = _compute_com_vectorized(
-            atom_coords,
-            com_metadata["atom_mask"],
-            com_metadata["effective_masses"],
-            com_metadata["group_indices"],
-            com_metadata["group_masses"],
-        )
-        
-        # Flatten for output: (frames, molecules*3)
-        centers_of_mass_flat = centers_of_mass.reshape(n_frames, -1)
+        effective_chunk_size = _normalize_chunk_size(chunk_size, n_frames)
+        num_groups = len(com_metadata["group_masses"])
+        centers_of_mass_flat = np.empty((n_frames, num_groups * 3), dtype=np.float64)
+        if effective_chunk_size < n_frames:
+            total_chunks = (n_frames + effective_chunk_size - 1) // effective_chunk_size
+            print(f"    Using Step 3 chunked processing: {effective_chunk_size} frames per chunk ({total_chunks} chunks)")
+        for start_idx in range(0, n_frames, effective_chunk_size):
+            end_idx = min(start_idx + effective_chunk_size, n_frames)
+            centers_chunk = _compute_com_vectorized(
+                atom_coords[start_idx:end_idx],
+                com_metadata["atom_mask"],
+                com_metadata["effective_masses"],
+                com_metadata["group_indices"],
+                com_metadata["group_masses"],
+            )
+            centers_of_mass_flat[start_idx:end_idx] = centers_chunk.reshape(end_idx - start_idx, -1)
         
         # Save with efficient formatting
         save_numeric_array(

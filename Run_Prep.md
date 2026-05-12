@@ -13,7 +13,7 @@ Platform notes:
 
 - macOS: use the real executable from the VMD application bundle, not `startup.command.csh` and not an alias such as `vmd` defined only in your interactive shell
 - macOS: inspect the bundle with `ls -l "/Applications/VMD ... .app/Contents/vmd"` and use the actual binary you find there, such as `vmd_MACOSXARM64`
-- macOS: if a trajectory-extraction step creates zero-byte `.rawf32` / `.shape` files, do not use `startup.command.csh`; use the actual VMD executable inside the app bundle
+- macOS: if a trajectory-extraction step creates a missing, empty, or invalid `.vmdtmp.bin` coordinate temp file, do not use `startup.command.csh`; use the actual VMD executable inside the app bundle
 - Linux: use the real VMD executable path, or a real executable/symlink discoverable by `which -a vmd`
 - Linux: if `vmd` works in your terminal, run `which -a vmd` and enter that executable path in the software
 - Windows: use the real `vmd.exe` path, not a desktop shortcut or a shell-only wrapper command
