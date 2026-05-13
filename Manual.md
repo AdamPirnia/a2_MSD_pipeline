@@ -1062,7 +1062,7 @@ This tab computes charge-dipole structure factors from:
 
 The charge-coordinate, dipole-position, and dipole-vector patterns must resolve to the same number of files.
 
-The charge-values file is normally a constant-charge table. If the file has more than one column, the calculation uses the last column as the charge value. For two-column files, the first column may be a charge-site index for human bookkeeping, but it is not used to reorder coordinates; charge rows are expected to match the charge-coordinate site order after any optional deletion.
+The charge-values file is normally a constant-charge table. If the file has more than one column, the calculation uses the last column as the charge value. For two-column files, the first column may be a charge-site index for human bookkeeping, but it is not used to reorder coordinates; charge rows are expected to match the charge-coordinate site order. If `Mask Charge Number(s) (optional)` is set, those charge values are set to `0.0` before nonzero-charge filtering.
 
 Charge sites with charge exactly `0.0` are ignored before the charge-dipole calculation starts. This means they do not contribute to `Sqp(k)`, and they also do not define cutoff neighborhoods. With a cutoff enabled, only dipoles within the cutoff distance of nonzero charge sites are included.
 
@@ -1079,7 +1079,7 @@ Charge sites with charge exactly `0.0` are ignored before the charge-dipole calc
 - `Isotropic Output Path`: isotropic charge-dipole output file
 - `Directional Output Path`: directional charge-dipole output file; required only in directional mode
 - `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`
-- `Delete Residue Index (optional)`: optional zero-based charge-site index removed from the charge values and charge-coordinate arrays before calculation
+- `Mask Charge Number(s) (optional)`: optional one-based charge number or comma-separated charge numbers whose charge values are set to `0.0` before calculation; for example, `1, 68` masks Python entries `charges[0]` and `charges[67]`; the charge-coordinate array is not changed
 - `Trajectory desired length (optional)`: same syntax as the density tab
 - `Trajectory Selection`: optional zero-based subset of trajectory indices to process from `Number of Trajectories`; supports the same syntax as `DCD Selection (optional)`
 
@@ -1096,7 +1096,9 @@ The charge-dipole tab uses the same three `k`-resolution tiers in both direction
 For all charge-dipole calculations, the distance vector is defined as:
 
 $$
+{\Huge
 \mathbf r_{q,p} = \mathbf r_p - \mathbf r_q
+}
 $$
 
 where `q` is the charge site and `p` is the dipole position. This vector points from the charge site to the dipole position.
@@ -1108,19 +1110,23 @@ This mode writes both a directional table and an isotropic shell average derived
 With `Small k approx` unchecked, the directional charge-dipole structure factor is:
 
 $$
+{\Huge
 S_{qp}(\mathbf k) =
 i\sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf k}\right)
 \exp\!\left(i\mathbf k\cdot\mathbf r_{q,p}\right)
+}
 $$
 
 With `Small k approx` checked, the first-order small-`k` directional approximation is:
 
 $$
+{\Huge
 S_{qp}(\mathbf k) \simeq
 -k\sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf k}\right)
 \left(\hat{\mathbf k}\cdot\mathbf r_{q,p}\right)
+}
 $$
 
 The small-`k` directional approximation is real-valued. The output still keeps the same real/imaginary column layout as the full directional calculation; the imaginary column is zero in small-`k` mode.
@@ -1152,19 +1158,23 @@ This mode writes one isotropic table directly.
 With `Small k approx` unchecked, the isotropic charge-dipole structure factor is:
 
 $$
+{\Huge
 S_{qp}(k) =
 -\sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf r}_{q,p}\right)
 j_1\!\left(k|\mathbf r_{q,p}|\right)
+}
 $$
 
 With `Small k approx` checked, the first-order small-`k` isotropic approximation is:
 
 $$
+{\Huge
 S_{qp}(k) \simeq
 -\frac{k}{3}
 \sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\mathbf r_{q,p}\right)
+}
 $$
 
 Output format:
@@ -1199,6 +1209,122 @@ The generated scripts may also write:
 - per-file-set reports such as `output_1.dat`, `output_2.dat`, and so on
 - `status.log`
 - `dipole_counts/dipole_count_<trajectory>.dat`
+
+## Static Structure Factor Output File Structures
+
+This section summarizes the output tables for all static-structure-factor calculations. Unless a file explicitly begins with `#` header lines, the output is a plain numeric table with one data row per sampled `k` value, `k` vector, or shell.
+
+### Density Isotropic Output
+
+Rows:
+
+- one row per retained isotropic `|k|` value
+- rows are ordered by increasing `|k|`
+
+Columns:
+
+- column 1: `|k|`, the magnitude of the reciprocal-space vector
+- column 2: `S(k)`, the isotropic density structure factor averaged over processed frames and trajectory files
+
+Per-trajectory reports use the same two-column layout and are combined into the final output using frame-weighted averaging.
+
+### Density Directional Output
+
+Rows:
+
+- one row per sampled reciprocal-space vector
+- vectors with the same `|k|` remain separate if their directions differ
+
+Columns:
+
+- column 1: `k_x`
+- column 2: `k_y`
+- column 3: `k_z`
+- column 4: `|k|`
+- column 5: `S(k)` for that explicit vector
+
+Per-trajectory reports use the same five-column layout and are combined into the final output using frame-weighted averaging.
+
+### Density Along-Components Output
+
+For one-axis selections such as `x`, `y`, or `z`:
+
+- each row is one allowed value along the selected axis
+- column 1 is `|k_x|`, `|k_y|`, or `|k_z|`
+- column 2 is `S(k)` for that one-dimensional selection
+
+For multi-axis selections such as `x+y`, `x+z`, `y+z`, or `x+y+z`:
+
+- each row is one shell-averaged total `|k|`
+- column 1 is shell-averaged `|k|`
+- column 2 is shell-averaged `S(k)`
+
+When multiple component selections are requested, each selection gets its own output file by appending a component label such as `_kx`, `_ky`, `_kxy`, or `_kxyz` to the requested output path.
+
+### Charge-Dipole Directional Output
+
+Directional mode writes two main output files.
+
+The directional output file has one row per sampled reciprocal-space vector:
+
+- column 1: `k_x`
+- column 2: `k_y`
+- column 3: `k_z`
+- column 4: `|k|`
+- column 5: real part of `Sqp(k)`
+- column 6: imaginary part of `Sqp(k)`
+
+The isotropic output file produced from directional mode has one row per shell:
+
+- column 1: shell-averaged `|k|`
+- column 2: shell-averaged real part
+- column 3: shell-averaged imaginary part
+- column 4: number of directional `k` vectors contributing to that shell
+
+In directional small-`k` mode, the imaginary column is kept for format consistency and is written as zero.
+
+### Charge-Dipole Isotropic Output
+
+Direct isotropic charge-dipole mode writes one main output file. It begins with `#` header lines that record input paths, strides, box lengths, `k` tiers, cutoff settings, masked charge number(s), frame counts, and trajectory counts. Numeric loaders such as NumPy skip those header lines by default.
+
+Rows:
+
+- one row per generated isotropic `|k|` value
+- rows are ordered by increasing `|k|`
+
+Columns:
+
+- column 1: `|k|`
+- column 2: raw accumulated `Sqp(k)`
+- column 3: average number of dipoles included by `CO-1`
+- column 4: average number of dipoles included by `CO-2`
+- column 5: average number of dipoles included by `CO-3`
+
+The `Sqp(k)` value is raw accumulated output: it is not divided by the number of frames, trajectory files, or dipoles.
+
+### Charge-Dipole Dipole-Count Outputs
+
+When charge-dipole calculations run, the workflow writes one `dipole_counts/dipole_count_<trajectory>.dat` file per processed trajectory. These files begin with `#` header lines describing the trajectory index and cutoff values.
+
+Rows:
+
+- one row per processed frame in that trajectory
+- `Frame` is the processed-frame counter in the charge-dipole workflow, starting from `1`
+
+Columns:
+
+- column 1: `Frame`
+- column 2: number of unique dipoles included by `CO-1`
+- column 3: number of unique dipoles included by `CO-2`
+- column 4: number of unique dipoles included by `CO-3`
+
+If a cutoff tier is not set, its count column may remain zero or unused for that tier.
+
+### Status Logs And Per-Trajectory Reports
+
+For long structure-factor jobs, `status.log` records periodic progress lines with elapsed time, processed frame count, coordinate or charge count, number of `k` values or vectors, and, for charge-dipole runs, the current dipole count.
+
+Per-trajectory or per-file-set reports are saved next to the main output using names derived from the output path, such as `output_1.dat` and `output_2.dat`. These reports use the same column layout as the corresponding main output, but contain only one trajectory or one charge/dipole file set.
 
 ## Final notes
 

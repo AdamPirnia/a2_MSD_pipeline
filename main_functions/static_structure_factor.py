@@ -926,7 +926,7 @@ def _charge_dipole_isotropic_output_header(
     dipole_count: int | str,
     frame_count: int,
     trajectory_count: int,
-    delete_residue_index: int | None,
+    delete_residue_index: Any | None,
     frame_window: tuple[int, int | None, int] | None,
     trajectory_selection: str | None,
     small_k_approx: bool = False,
@@ -962,7 +962,7 @@ def _charge_dipole_isotropic_output_header(
         f"Dipoles per frame: {dipole_count}",
         f"Total frames accumulated: {int(frame_count)}",
         f"Trajectories summed: {int(trajectory_count)}",
-        f"Delete residue index: {_format_header_value(delete_residue_index)}",
+        f"Masked charge number(s): {_format_header_value(delete_residue_index)}",
         f"Trajectory desired length: {frame_window_text}",
         f"Trajectory selection: {_format_header_value(trajectory_selection)}",
     ]
@@ -1438,7 +1438,7 @@ def _resolve_chunk_length(value: int | None, total: int) -> int:
 def _load_charge_values(
     charge_file: str,
     input_io_spec: dict[str, Any] | None,
-    delete_index: int | None,
+    delete_index: Any | None,
 ) -> np.ndarray:
     values = load_numeric_array(
         charge_file,
@@ -1452,10 +1452,47 @@ def _load_charge_values(
     else:
         charge_values = charge_array.reshape(-1)
     if delete_index is not None:
-        charge_values = np.delete(charge_values, int(delete_index), axis=0)
+        charge_values = np.asarray(charge_values, dtype=np.float64).copy()
+        for masked_index in _charge_mask_indices(delete_index, int(charge_values.size)):
+            charge_values[masked_index] = 0.0
     if charge_values.size <= 0:
         raise ValueError("Charge values file produced an empty charge array.")
     return np.asarray(charge_values, dtype=np.float64)
+
+
+def _charge_mask_indices(mask_spec: Any, charge_count: int) -> list[int]:
+    if charge_count <= 0:
+        return []
+    if isinstance(mask_spec, (int, np.integer)):
+        charge_number = int(mask_spec)
+        if charge_number <= 0:
+            raise IndexError("Charge numbers to mask are one-based and must be at least 1.")
+        masked_indices = [charge_number - 1]
+    elif isinstance(mask_spec, (list, tuple, set, np.ndarray)):
+        masked_indices = []
+        for item in mask_spec:
+            masked_indices.extend(_charge_mask_indices(item, charge_count))
+        return sorted(set(masked_indices))
+    else:
+        text = str(mask_spec).strip()
+        if not text:
+            return []
+        masked_indices = []
+        for token in re.split(r"[\s,]+", text):
+            if not token:
+                continue
+            charge_number = int(token)
+            if charge_number <= 0:
+                raise IndexError("Charge numbers to mask are one-based and must be at least 1.")
+            masked_indices.append(charge_number - 1)
+
+    for masked_index in masked_indices:
+        if masked_index < 0 or masked_index >= charge_count:
+            raise IndexError(
+                f"Charge number to mask ({masked_index + 1}) is outside the valid range "
+                f"1-{charge_count}."
+            )
+    return sorted(set(masked_indices))
 
 
 def _active_charge_site_count(charge_values: np.ndarray) -> int:
@@ -1466,7 +1503,6 @@ def _prepare_xyz_frames(
     array: np.ndarray,
     *,
     name: str,
-    delete_index: int | None = None,
 ) -> np.ndarray:
     coords, _ = _prepare_coordinate_array(array)
     coords_3d = np.asarray(coords, dtype=np.float64)
@@ -1474,10 +1510,8 @@ def _prepare_xyz_frames(
         coords_3d = coords_3d.reshape(coords_3d.shape[0], coords_3d.shape[1] // 3, 3)
     if coords_3d.ndim != 3 or coords_3d.shape[2] != 3:
         raise ValueError(f"{name} must be shaped as (frames, atoms, 3) or (frames, 3*atoms).")
-    if delete_index is not None:
-        coords_3d = np.delete(coords_3d, int(delete_index), axis=1)
     if int(coords_3d.shape[1]) <= 0:
-        raise ValueError(f"{name} has no points after applying the optional deletion.")
+        raise ValueError(f"{name} has no points after preprocessing.")
     return np.ascontiguousarray(coords_3d, dtype=np.float64)
 
 
@@ -2216,7 +2250,7 @@ def compute_charge_dipole_structure_factor_from_files(
     cell_size: float | None = None,
     num_trajectories: int | None = None,
     trajectory_selection: str | None = None,
-    delete_residue_index: int | None = None,
+    delete_residue_index: Any | None = None,
     frame_chunk: int | None = None,
     charge_chunk: int | None = None,
     dipole_chunk: int | None = None,
@@ -2376,7 +2410,7 @@ def compute_charge_dipole_structure_factor_from_files(
         f"k={k_chunk if k_chunk is not None else 'off'}",
         flush=True,
     )
-    print(f"delete residue index: {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
+    print(f"masked charge number(s): {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
     print(f"active nonzero charge sites: {active_charge_count}", flush=True)
     if frame_window is None:
         print("trajectory desired length: full trajectory", flush=True)
@@ -2424,7 +2458,6 @@ def compute_charge_dipole_structure_factor_from_files(
         charge_positions = _prepare_xyz_frames(
             charge_position_array,
             name=str(rq_file),
-            delete_index=delete_residue_index,
         )
         dipole_positions = _prepare_xyz_frames(
             dipole_position_array,
@@ -2695,7 +2728,6 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
         charge_positions = _prepare_xyz_frames(
             charge_position_array,
             name=str(rq_file),
-            delete_index=delete_residue_index,
         )
         dipole_positions = _prepare_xyz_frames(
             dipole_position_array,
@@ -2904,7 +2936,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     cell_size: float | None = None,
     num_trajectories: int | None = None,
     trajectory_selection: str | None = None,
-    delete_residue_index: int | None = None,
+    delete_residue_index: Any | None = None,
     frame_chunk: int | None = None,
     charge_chunk: int | None = None,
     dipole_chunk: int | None = None,
@@ -3063,7 +3095,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         flush=True,
     )
     print(f"max workers: {int(max_workers)}", flush=True)
-    print(f"delete residue index: {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
+    print(f"masked charge number(s): {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
     print(f"active nonzero charge sites: {active_charge_count}", flush=True)
     if frame_window is None:
         print("trajectory desired length: full trajectory", flush=True)
