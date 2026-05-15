@@ -889,6 +889,7 @@ This module generates scripts for density structure factors and charge-dipole st
 - `Common Terms`: optional `*` and `**` replacements, exactly like the other modules
 - `Number of Trajectories`: optional limit on how many discovered trajectory files or file sets are used; leave blank to use all discovered inputs
 - `Max Workers`: maximum worker processes used when the density structure-factor calculations average over multiple trajectory files
+- `Resume`: when `Use existing per-trajectory outputs` is checked, trajectories whose per-trajectory report files already exist and match the current `k` grid are reused; use this only when rerunning the same inputs/settings after an interrupted job; missing trajectories are computed, and the final total includes both reused and newly computed reports
 
 ## Density Structure Factor Tab
 
@@ -1228,6 +1229,8 @@ Columns:
 
 Per-trajectory reports use the same two-column layout and are combined into the final output using frame-weighted averaging.
 
+With resume enabled, an existing per-trajectory density report is reused only if its `|k|` column matches the current settings. The code still reads the matching coordinate file metadata so the final frame-weighted average uses the correct frame count.
+
 ### Density Directional Output
 
 Rows:
@@ -1245,6 +1248,8 @@ Columns:
 
 Per-trajectory reports use the same five-column layout and are combined into the final output using frame-weighted averaging.
 
+With resume enabled, an existing per-trajectory directional report is reused only if its `k_x`, `k_y`, `k_z`, and `|k|` columns match the current settings. The final output is rebuilt from all reused and newly computed reports.
+
 ### Density Along-Components Output
 
 For one-axis selections such as `x`, `y`, or `z`:
@@ -1260,6 +1265,8 @@ For multi-axis selections such as `x+y`, `x+z`, `y+z`, or `x+y+z`:
 - column 2 is shell-averaged `S(k)`
 
 When multiple component selections are requested, each selection gets its own output file by appending a component label such as `_kx`, `_ky`, `_kxy`, or `_kxyz` to the requested output path.
+
+Resume is checked separately for each component output file, so one component can reuse existing per-trajectory reports while another component computes missing reports.
 
 ### Charge-Dipole Directional Output
 
@@ -1283,6 +1290,8 @@ The isotropic output file produced from directional mode has one row per shell:
 
 In directional small-`k` mode, the imaginary column is kept for format consistency and is written as zero.
 
+With resume enabled, the directional per-trajectory report is the file that controls reuse. Its `k_x`, `k_y`, `k_z`, and `|k|` columns must match the current settings, and the matching `dipole_counts/dipole_count_<trajectory>.dat` file must exist for the same frame selection.
+
 ### Charge-Dipole Isotropic Output
 
 Direct isotropic charge-dipole mode writes one main output file. It begins with `#` header lines that record input paths, strides, box lengths, `k` tiers, cutoff settings, masked charge number(s), frame counts, and trajectory counts. Numeric loaders such as NumPy skip those header lines by default.
@@ -1301,6 +1310,8 @@ Columns:
 - column 5: average number of dipoles included by `CO-3`
 
 The `Sqp(k)` value is raw accumulated output: it is not divided by the number of frames, trajectory files, or dipoles.
+
+With resume enabled, direct isotropic charge-dipole per-trajectory reports are reused only if their `|k|` column matches the current settings. The matching dipole-count file is also required so the final `CO-1`, `CO-2`, and `CO-3` average-count columns can include reused trajectories.
 
 ### Charge-Dipole Dipole-Count Outputs
 
@@ -1325,6 +1336,8 @@ If a cutoff tier is not set, its count column may remain zero or unused for that
 For long structure-factor jobs, `status.log` records periodic progress lines with elapsed time, processed frame count, coordinate or charge count, number of `k` values or vectors, and, for charge-dipole runs, the current dipole count.
 
 Per-trajectory or per-file-set reports are saved next to the main output using names derived from the output path, such as `output_1.dat` and `output_2.dat`. These reports use the same column layout as the corresponding main output, but contain only one trajectory or one charge/dipole file set.
+
+When resume is enabled and an existing per-trajectory report has the wrong number of columns, a different `k` grid, or a missing/mismatched charge-dipole dipole-count file, the run stops with a clear resume error instead of silently mixing incompatible data.
 
 ## Final notes
 

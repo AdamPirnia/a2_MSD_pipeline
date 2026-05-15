@@ -1217,6 +1217,173 @@ def _apply_frame_stride(coords: np.ndarray, stride: int, *, label: str) -> np.nd
     return sliced
 
 
+def _load_saved_trajectory_report_if_compatible(
+    *,
+    report_path: str,
+    value_columns: tuple[int, ...],
+    io_spec: dict[str, Any] | None,
+    default_mode: str,
+    default_precision: str,
+    expected_prefix: np.ndarray | None = None,
+    expected_prefix_columns: tuple[int, ...] | None = None,
+) -> np.ndarray | None:
+    if not os.path.isfile(report_path):
+        return None
+    try:
+        trajectory_output = load_numeric_array(
+            report_path,
+            io_spec,
+            default_mode=default_mode,
+            default_precision=default_precision,
+        )
+        trajectory_output = np.asarray(trajectory_output, dtype=np.float64)
+        if trajectory_output.ndim == 1:
+            trajectory_output = trajectory_output.reshape(1, -1)
+        if trajectory_output.shape[1] <= max(value_columns):
+            raise ValueError("too few columns")
+
+        if expected_prefix is not None and expected_prefix_columns is not None:
+            current_prefix = trajectory_output[:, list(expected_prefix_columns)]
+            if current_prefix.shape != expected_prefix.shape or not np.allclose(
+                current_prefix,
+                expected_prefix,
+                rtol=1.0e-10,
+                atol=1.0e-12,
+            ):
+                raise ValueError("k values do not match the current run")
+    except Exception as exc:
+        raise ValueError(
+            "Resume is enabled, but an existing per-trajectory output cannot be reused: "
+            f"{report_path} ({exc}). Remove or rename the incompatible file, or rerun with resume disabled."
+        ) from exc
+    return trajectory_output
+
+
+def _coordinate_report_metadata(
+    *,
+    file_path: str,
+    input_io_spec: dict[str, Any] | None,
+    coords_stride: int,
+    frame_window: tuple[int, int | None, int] | None,
+) -> tuple[int, int]:
+    array = load_numeric_array(
+        file_path,
+        input_io_spec,
+        default_mode="text",
+        default_precision="double",
+    )
+    coords, coord_count = _prepare_coordinate_array(array)
+    coords = _apply_frame_stride(coords, coords_stride, label="Coordinate Path")
+    coords = _apply_frame_window(coords, frame_window)
+    frame_count = int(coords.shape[0])
+    if frame_count <= 0:
+        raise ValueError(f"No frames found in coordinate file: {file_path}")
+    return frame_count, int(coord_count)
+
+
+def _charge_dipole_report_metadata(
+    *,
+    rq_file: str,
+    rp_file: str,
+    mu_file: str,
+    charge_values_count: int,
+    charge_coords_stride: int,
+    dipole_positions_stride: int,
+    dipole_vectors_stride: int,
+    frame_window: tuple[int, int | None, int] | None,
+    charge_coords_io_spec: dict[str, Any] | None,
+    dipole_positions_io_spec: dict[str, Any] | None,
+    dipole_vectors_io_spec: dict[str, Any] | None,
+) -> tuple[int, int]:
+    charge_position_array = load_numeric_array(
+        rq_file,
+        charge_coords_io_spec,
+        default_mode="text",
+        default_precision="double",
+    )
+    dipole_position_array = load_numeric_array(
+        rp_file,
+        dipole_positions_io_spec,
+        default_mode="text",
+        default_precision="double",
+    )
+    dipole_vector_array = load_numeric_array(
+        mu_file,
+        dipole_vectors_io_spec,
+        default_mode="text",
+        default_precision="double",
+    )
+    charge_positions = _prepare_xyz_frames(charge_position_array, name=str(rq_file))
+    dipole_positions = _prepare_xyz_frames(dipole_position_array, name=str(rp_file))
+    dipole_vectors = _prepare_xyz_frames(dipole_vector_array, name=str(mu_file))
+    charge_positions = _apply_frame_stride(charge_positions, charge_coords_stride, label="Charge Coordinates Path")
+    dipole_positions = _apply_frame_stride(dipole_positions, dipole_positions_stride, label="Dipole Positions Path")
+    dipole_vectors = _apply_frame_stride(dipole_vectors, dipole_vectors_stride, label="Dipole Vectors Path")
+    charge_positions = _apply_frame_window(charge_positions, frame_window)
+    dipole_positions = _apply_frame_window(dipole_positions, frame_window)
+    dipole_vectors = _apply_frame_window(dipole_vectors, frame_window)
+
+    frame_count = min(int(charge_positions.shape[0]), int(dipole_positions.shape[0]), int(dipole_vectors.shape[0]))
+    if frame_count <= 0:
+        raise ValueError(f"No frames available after preprocessing for file set: {rq_file}")
+    if int(charge_positions.shape[1]) != int(charge_values_count):
+        raise ValueError(
+            f"Charge-value count mismatch: len(Z)={int(charge_values_count)} but "
+            f"charge positions contain {int(charge_positions.shape[1])} sites."
+        )
+    return frame_count, int(dipole_positions.shape[1])
+
+
+def _dipoles_count_stats_from_file(path: str) -> tuple[np.ndarray, np.ndarray, int]:
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Missing dipoles count file required for resume: {path}")
+
+    rows: list[list[int]] = []
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = stripped.split()
+            try:
+                values = [int(float(part)) for part in parts[:4]]
+            except ValueError:
+                continue
+            if len(values) == 4:
+                rows.append(values)
+
+    if not rows:
+        raise ValueError(f"Dipoles count file has no frame rows: {path}")
+    counts = np.asarray(rows, dtype=np.int64)[:, 1:4]
+    return counts.sum(axis=0, dtype=np.float64), np.full(3, counts.shape[0], dtype=np.int64), int(counts.shape[0])
+
+
+def _combine_report_stats(
+    *,
+    reused_reports: list[dict[str, Any]],
+    computed_stats: dict[str, Any] | None,
+    dataset_label: str,
+) -> dict[str, Any]:
+    computed_reports = [] if computed_stats is None else list(computed_stats.get("reports", []))
+    reports = list(reused_reports) + computed_reports
+    reports.sort(key=lambda item: int(item["trajectory_index"]))
+    total_frames = int(sum(int(item["frame_count"]) for item in reports))
+    if total_frames <= 0:
+        raise ValueError(f"No usable trajectories were found for {dataset_label}.")
+    failed = [] if computed_stats is None else list(computed_stats.get("failed", []))
+    return {
+        "reports": reports,
+        "failed": failed,
+        "total_frames": total_frames,
+        "success_count": len(reports),
+        "failure_count": len(failed),
+        "success_indices": [int(item["trajectory_index"]) for item in reports],
+        "trajectory_results": reports,
+        "reused_count": len(reused_reports),
+        "computed_count": len(computed_reports),
+    }
+
+
 def _validate_cutoff_and_cell_size(
     cutoff: float | None,
     cell_size: float | None,
@@ -2263,6 +2430,7 @@ def compute_charge_dipole_structure_factor_from_files(
     isotropic_output_io_spec: dict[str, Any] | None = None,
     directional_output_io_spec: dict[str, Any] | None = None,
     small_k_approx: bool = False,
+    resume: bool = False,
 ) -> dict[str, Any]:
     overall_start = time.time()
     k_max_primary, k_max_secondary, k_max_tertiary, k_resolution_primary, k_resolution_secondary, k_resolution_tertiary = _resolve_three_tier_k_parameters(
@@ -2410,6 +2578,7 @@ def compute_charge_dipole_structure_factor_from_files(
         f"k={k_chunk if k_chunk is not None else 'off'}",
         flush=True,
     )
+    print(f"resume from existing per-trajectory outputs: {'enabled' if resume else 'disabled'}", flush=True)
     print(f"masked charge number(s): {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
     print(f"active nonzero charge sites: {active_charge_count}", flush=True)
     if frame_window is None:
@@ -2423,6 +2592,8 @@ def compute_charge_dipole_structure_factor_from_files(
     if trajectory_selection:
         print(f"trajectory selection: {trajectory_indices}", flush=True)
 
+    directional_expected_prefix = np.column_stack((k_vectors_array, k_magnitudes))
+    reused_file_sets = 0
     for file_index, rq_file, rp_file, mu_file in zip(
         selected_file_indices,
         charge_coordinate_files,
@@ -2435,6 +2606,89 @@ def compute_charge_dipole_structure_factor_from_files(
         print(f"  charge coordinates: {rq_file}", flush=True)
         print(f"  dipole positions:   {rp_file}", flush=True)
         print(f"  dipole vectors:     {mu_file}", flush=True)
+
+        directional_report_path = _single_trajectory_report_path(directional_output_path, file_index)
+        if resume:
+            existing_directional_report = _load_saved_trajectory_report_if_compatible(
+                report_path=directional_report_path,
+                value_columns=(4, 5),
+                io_spec=directional_output_io_spec,
+                default_mode="text",
+                default_precision="double",
+                expected_prefix=directional_expected_prefix,
+                expected_prefix_columns=(0, 1, 2, 3),
+            )
+            if existing_directional_report is not None:
+                frame_count, dipole_count = _charge_dipole_report_metadata(
+                    rq_file=rq_file,
+                    rp_file=rp_file,
+                    mu_file=mu_file,
+                    charge_values_count=int(charge_values.shape[0]),
+                    charge_coords_stride=int(charge_coords_stride),
+                    dipole_positions_stride=int(dipole_positions_stride),
+                    dipole_vectors_stride=int(dipole_vectors_stride),
+                    frame_window=frame_window,
+                    charge_coords_io_spec=charge_coords_io_spec,
+                    dipole_positions_io_spec=dipole_positions_io_spec,
+                    dipole_vectors_io_spec=dipole_vectors_io_spec,
+                )
+                dipoles_count_file = _dipoles_count_file_for_trajectory(isotropic_output_path, file_index)
+                _tier_sums, _tier_frames, count_file_frames = _dipoles_count_stats_from_file(dipoles_count_file)
+                if int(count_file_frames) != int(frame_count):
+                    raise ValueError(
+                        "Resume is enabled, but the dipoles count file does not match the current "
+                        f"frame selection for trajectory {file_index}: {dipoles_count_file}"
+                    )
+                directional_raw_single = (
+                    np.asarray(existing_directional_report[:, 4], dtype=np.float64)
+                    + 1j * np.asarray(existing_directional_report[:, 5], dtype=np.float64)
+                )
+                isotropic_report_path = _single_trajectory_report_path(isotropic_output_path, file_index)
+                if not os.path.isfile(isotropic_report_path):
+                    k_shell_single, isotropic_single, shell_counts_single = _shell_average_complex(
+                        k_magnitudes,
+                        directional_raw_single,
+                        float(shell_width),
+                    )
+                    isotropic_report_path = _write_single_trajectory_output(
+                        isotropic_output_path,
+                        file_index,
+                        np.column_stack((k_shell_single, isotropic_single.real, isotropic_single.imag, shell_counts_single)),
+                        isotropic_output_io_spec,
+                        default_mode="text",
+                        default_precision="double",
+                    )
+                isotropic_single_trajectory_reports.append(isotropic_report_path)
+                directional_single_trajectory_reports.append(directional_report_path)
+                dipoles_count_files.append(dipoles_count_file)
+                total_frames += int(frame_count)
+                reused_file_sets += 1
+                per_file_stats.append(
+                    {
+                        "charge_coordinate_file": rq_file,
+                        "dipole_position_file": rp_file,
+                        "dipole_vector_file": mu_file,
+                        "frame_count": int(frame_count),
+                        "dipole_count": int(dipole_count),
+                        "dipoles_count_file": dipoles_count_file,
+                        "elapsed_s": 0.0,
+                        "reused": True,
+                    }
+                )
+                directional_reports.append(
+                    {
+                        "trajectory_index": int(file_index),
+                        "file_path": str(rq_file),
+                        "frame_count": int(frame_count),
+                        "coord_count": int(dipole_count),
+                        "elapsed_s": 0.0,
+                        "output_file": directional_report_path,
+                        "reused": True,
+                    }
+                )
+                print(f"Reusing directional charge-dipole per-trajectory output for trajectory {file_index}: {directional_report_path}", flush=True)
+                print(f"  accumulated frames: {total_frames}", flush=True)
+                continue
 
         charge_position_array = load_numeric_array(
             rq_file,
@@ -2635,6 +2889,8 @@ def compute_charge_dipole_structure_factor_from_files(
     print(f"Saved directional charge-dipole output: {directional_output_path}", flush=True)
     print(f"Saved dipoles count outputs: {_dipoles_count_directory_for_output(isotropic_output_path)}", flush=True)
     print(f"total file sets used: {len(per_file_stats)}", flush=True)
+    print(f"reused file sets: {reused_file_sets}", flush=True)
+    print(f"computed file sets: {len(per_file_stats) - reused_file_sets}", flush=True)
     print(f"total frames used: {total_frames}", flush=True)
     print(f"total elapsed time: {overall_elapsed:.2f} s", flush=True)
 
@@ -2949,6 +3205,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     dipole_vectors_io_spec: dict[str, Any] | None = None,
     isotropic_output_io_spec: dict[str, Any] | None = None,
     small_k_approx: bool = False,
+    resume: bool = False,
 ) -> dict[str, Any]:
     overall_start = time.time()
     k_max_primary, k_max_secondary, k_max_tertiary, k_resolution_primary, k_resolution_secondary, k_resolution_tertiary = _resolve_three_tier_k_parameters(
@@ -3095,6 +3352,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         flush=True,
     )
     print(f"max workers: {int(max_workers)}", flush=True)
+    print(f"resume from existing per-trajectory outputs: {'enabled' if resume else 'disabled'}", flush=True)
     print(f"masked charge number(s): {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
     print(f"active nonzero charge sites: {active_charge_count}", flush=True)
     if frame_window is None:
@@ -3107,6 +3365,76 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     print(f"file sets used: {len(selected_file_indices)}", flush=True)
     if trajectory_selection:
         print(f"trajectory selection: {trajectory_indices}", flush=True)
+
+    tier_masks = _three_tier_masks_from_magnitudes(
+        k_magnitudes,
+        k_max_primary,
+        k_max_secondary,
+        k_max_tertiary,
+    )
+    active_tier_frames = np.asarray([np.any(mask) for mask in tier_masks], dtype=bool)
+    reused_results: list[dict[str, Any]] = []
+    task_items: list[tuple[int, str, str, str]] = []
+    for file_index, rq_file, rp_file, mu_file in zip(
+        selected_file_indices,
+        charge_coordinate_files,
+        dipole_position_files,
+        dipole_vector_files,
+        strict=False,
+    ):
+        report_path = _single_trajectory_report_path(isotropic_output_path, file_index)
+        if resume:
+            existing_report = _load_saved_trajectory_report_if_compatible(
+                report_path=report_path,
+                value_columns=(1,),
+                io_spec=isotropic_output_io_spec,
+                default_mode="text",
+                default_precision="double",
+                expected_prefix=k_magnitudes.reshape(-1, 1),
+                expected_prefix_columns=(0,),
+            )
+            if existing_report is not None:
+                frame_count, dipole_count = _charge_dipole_report_metadata(
+                    rq_file=rq_file,
+                    rp_file=rp_file,
+                    mu_file=mu_file,
+                    charge_values_count=int(charge_values.shape[0]),
+                    charge_coords_stride=int(charge_coords_stride),
+                    dipole_positions_stride=int(dipole_positions_stride),
+                    dipole_vectors_stride=int(dipole_vectors_stride),
+                    frame_window=frame_window,
+                    charge_coords_io_spec=charge_coords_io_spec,
+                    dipole_positions_io_spec=dipole_positions_io_spec,
+                    dipole_vectors_io_spec=dipole_vectors_io_spec,
+                )
+                dipoles_count_file = _dipoles_count_file_for_trajectory(isotropic_output_path, file_index)
+                tier_sums, tier_frames, count_file_frames = _dipoles_count_stats_from_file(dipoles_count_file)
+                if int(count_file_frames) != int(frame_count):
+                    raise ValueError(
+                        "Resume is enabled, but the dipoles count file does not match the current "
+                        f"frame selection for trajectory {file_index}: {dipoles_count_file}"
+                    )
+                tier_frames = np.where(active_tier_frames, tier_frames, 0)
+                reused_results.append(
+                    {
+                        "trajectory_index": int(file_index),
+                        "charge_coordinate_file": rq_file,
+                        "dipole_position_file": rp_file,
+                        "dipole_vector_file": mu_file,
+                        "frame_count": int(frame_count),
+                        "dipole_count": int(dipole_count),
+                        "dipoles_count_file": dipoles_count_file,
+                        "dipoles_in_cutoff_tier_sums": np.asarray(tier_sums, dtype=np.float64),
+                        "dipoles_in_cutoff_tier_frames": np.asarray(tier_frames, dtype=np.int64),
+                        "elapsed_s": 0.0,
+                        "output_file": report_path,
+                        "error": "",
+                        "reused": True,
+                    }
+                )
+                print(f"Reusing isotropic charge-dipole per-trajectory output for trajectory {file_index}: {report_path}", flush=True)
+                continue
+        task_items.append((file_index, rq_file, rp_file, mu_file))
 
     task_args = [
         (
@@ -3146,13 +3474,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
             isotropic_output_io_spec,
             small_k_approx,
         )
-        for file_index, rq_file, rp_file, mu_file in zip(
-            selected_file_indices,
-            charge_coordinate_files,
-            dipole_position_files,
-            dipole_vector_files,
-            strict=False,
-        )
+        for file_index, rq_file, rp_file, mu_file in task_items
     ]
 
     worker_results: list[dict[str, Any]] = []
@@ -3164,6 +3486,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     else:
         for args in task_args:
             worker_results.append(_compute_single_charge_dipole_isotropic(args))
+    worker_results.extend(reused_results)
 
     worker_results.sort(key=lambda item: int(item.get("trajectory_index", 0)))
     failed = [item for item in worker_results if item.get("error")]
@@ -3284,6 +3607,8 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     print(f"\nSaved isotropic charge-dipole output: {isotropic_output_path}", flush=True)
     print(f"Saved dipoles count outputs: {_dipoles_count_directory_for_output(isotropic_output_path)}", flush=True)
     print(f"total file sets used: {len(per_file_stats)}", flush=True)
+    print(f"reused file sets: {len(reused_results)}", flush=True)
+    print(f"computed file sets: {len(task_args)}", flush=True)
     print(f"total frames used: {total_frames}", flush=True)
     print(f"total elapsed time: {overall_elapsed:.2f} s", flush=True)
 
@@ -3519,6 +3844,7 @@ def compute_static_structure_factor_from_files(
     frame_window: tuple[int, int | None, int] | None = None,
     input_io_spec: dict[str, Any] | None = None,
     output_io_spec: dict[str, Any] | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     overall_start = time.time()
     k_max_primary, k_max_secondary, k_max_tertiary, k_resolution_primary, k_resolution_secondary, k_resolution_tertiary = _resolve_three_tier_k_parameters(
@@ -3629,6 +3955,7 @@ def compute_static_structure_factor_from_files(
     )
     print(f"coordinate files discovered: {len(coordinate_files)}", flush=True)
     print(f"coordinate files used: {len(trajectory_indices)}", flush=True)
+    print(f"resume from existing per-trajectory outputs: {'enabled' if resume else 'disabled'}", flush=True)
     if trajectory_selection:
         print(f"trajectory selection: {trajectory_indices}", flush=True)
     tier_masks = _three_tier_masks_from_magnitudes(
@@ -3638,6 +3965,41 @@ def compute_static_structure_factor_from_files(
         k_max_tertiary,
     )
     selected_pairs = [(index + 1, coordinate_files[index]) for index in trajectory_indices]
+    reused_reports: list[dict[str, Any]] = []
+    pairs_to_compute: list[tuple[int, str]] = []
+    for index, file_path in selected_pairs:
+        report_path = _single_trajectory_report_path(resolved_output_file, index)
+        if resume:
+            existing_report = _load_saved_trajectory_report_if_compatible(
+                report_path=report_path,
+                value_columns=(1,),
+                io_spec=output_io_spec,
+                default_mode="text",
+                default_precision="double",
+                expected_prefix=k_vals.reshape(-1, 1),
+                expected_prefix_columns=(0,),
+            )
+            if existing_report is not None:
+                frame_count, coord_count = _coordinate_report_metadata(
+                    file_path=file_path,
+                    input_io_spec=input_io_spec,
+                    coords_stride=coords_stride,
+                    frame_window=frame_window,
+                )
+                reused_reports.append(
+                    {
+                        "trajectory_index": int(index),
+                        "file_path": str(file_path),
+                        "frame_count": int(frame_count),
+                        "coord_count": int(coord_count),
+                        "elapsed_s": 0.0,
+                        "output_file": report_path,
+                        "reused": True,
+                    }
+                )
+                print(f"Reusing isotropic per-trajectory output for trajectory {index}: {report_path}", flush=True)
+                continue
+        pairs_to_compute.append((index, file_path))
     task_args = [
         (
             index,
@@ -3658,12 +4020,21 @@ def compute_static_structure_factor_from_files(
             status_log_path,
             overall_start,
         )
-        for index, file_path in selected_pairs
+        for index, file_path in pairs_to_compute
     ]
-    stats = _run_report_tasks(
-        task_args=task_args,
-        worker=_compute_single_trajectory_sk_report,
-        max_workers=max_workers,
+    computed_stats = (
+        _run_report_tasks(
+            task_args=task_args,
+            worker=_compute_single_trajectory_sk_report,
+            max_workers=max_workers,
+            dataset_label="the coordinate dataset",
+        )
+        if task_args
+        else None
+    )
+    stats = _combine_report_stats(
+        reused_reports=reused_reports,
+        computed_stats=computed_stats,
         dataset_label="the coordinate dataset",
     )
     sk_values = _average_saved_trajectory_outputs(
@@ -3689,6 +4060,8 @@ def compute_static_structure_factor_from_files(
     overall_elapsed = time.time() - overall_start
     print(f"\nSaved isotropic S(k) output: {resolved_output_file}", flush=True)
     print(f"successful files: {stats['success_count']}", flush=True)
+    print(f"reused files: {stats['reused_count']}", flush=True)
+    print(f"computed files: {stats['computed_count']}", flush=True)
     print(f"failed files: {stats['failure_count']}", flush=True)
     print(f"total frames used: {stats['total_frames']}", flush=True)
     print(f"total elapsed time: {overall_elapsed:.2f} s", flush=True)
@@ -3736,6 +4109,7 @@ def compute_directional_structure_factor_from_files(
     input_io_spec: dict[str, Any] | None = None,
     output_io_spec: dict[str, Any] | None = None,
     active_axes: tuple[str, ...] | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     overall_start = time.time()
     k_max_primary, k_max_secondary, k_max_tertiary, k_resolution_primary, k_resolution_secondary, k_resolution_tertiary = _resolve_three_tier_k_parameters(
@@ -3833,6 +4207,7 @@ def compute_directional_structure_factor_from_files(
     print(f"anticipated directional S(k) output shape: {(int(k_vectors_array.shape[0]), 5)}", flush=True)
     print(f"coordinate files discovered: {len(coordinate_files)}", flush=True)
     print(f"coordinate files used: {len(trajectory_indices)}", flush=True)
+    print(f"resume from existing per-trajectory outputs: {'enabled' if resume else 'disabled'}", flush=True)
     if trajectory_selection:
         print(f"trajectory selection: {trajectory_indices}", flush=True)
     if frame_window is None:
@@ -3851,6 +4226,42 @@ def compute_directional_structure_factor_from_files(
         k_max_tertiary,
     )
     selected_pairs = [(index + 1, coordinate_files[index]) for index in trajectory_indices]
+    expected_prefix = np.column_stack((k_vectors_array, k_magnitudes))
+    reused_reports: list[dict[str, Any]] = []
+    pairs_to_compute: list[tuple[int, str]] = []
+    for index, file_path in selected_pairs:
+        report_path = _single_trajectory_report_path(resolved_output_file, index)
+        if resume:
+            existing_report = _load_saved_trajectory_report_if_compatible(
+                report_path=report_path,
+                value_columns=(4,),
+                io_spec=output_io_spec,
+                default_mode="text",
+                default_precision="double",
+                expected_prefix=expected_prefix,
+                expected_prefix_columns=(0, 1, 2, 3),
+            )
+            if existing_report is not None:
+                frame_count, coord_count = _coordinate_report_metadata(
+                    file_path=file_path,
+                    input_io_spec=input_io_spec,
+                    coords_stride=coords_stride,
+                    frame_window=frame_window,
+                )
+                reused_reports.append(
+                    {
+                        "trajectory_index": int(index),
+                        "file_path": str(file_path),
+                        "frame_count": int(frame_count),
+                        "coord_count": int(coord_count),
+                        "elapsed_s": 0.0,
+                        "output_file": report_path,
+                        "reused": True,
+                    }
+                )
+                print(f"Reusing directional per-trajectory output for trajectory {index}: {report_path}", flush=True)
+                continue
+        pairs_to_compute.append((index, file_path))
     task_args = [
         (
             index,
@@ -3871,15 +4282,23 @@ def compute_directional_structure_factor_from_files(
             status_log_path,
             overall_start,
         )
-        for index, file_path in selected_pairs
+        for index, file_path in pairs_to_compute
     ]
-    stats = _run_report_tasks(
-        task_args=task_args,
-        worker=_compute_single_trajectory_directional_sk_report,
-        max_workers=max_workers,
+    computed_stats = (
+        _run_report_tasks(
+            task_args=task_args,
+            worker=_compute_single_trajectory_directional_sk_report,
+            max_workers=max_workers,
+            dataset_label="the directional coordinate dataset",
+        )
+        if task_args
+        else None
+    )
+    stats = _combine_report_stats(
+        reused_reports=reused_reports,
+        computed_stats=computed_stats,
         dataset_label="the directional coordinate dataset",
     )
-    expected_prefix = np.column_stack((k_vectors_array, k_magnitudes))
     sk_values = _average_saved_trajectory_outputs(
         reports=stats["reports"],
         value_columns=(4,),
@@ -3902,6 +4321,8 @@ def compute_directional_structure_factor_from_files(
     overall_elapsed = time.time() - overall_start
     print(f"\nSaved directional S(k) output: {resolved_output_file}", flush=True)
     print(f"successful files: {stats['success_count']}", flush=True)
+    print(f"reused files: {stats['reused_count']}", flush=True)
+    print(f"computed files: {stats['computed_count']}", flush=True)
     print(f"failed files: {stats['failure_count']}", flush=True)
     print(f"total frames used: {stats['total_frames']}", flush=True)
     print(f"total elapsed time: {overall_elapsed:.2f} s", flush=True)
@@ -3956,6 +4377,7 @@ def compute_k_component_structure_factors_from_files(
     frame_window: tuple[int, int | None, int] | None = None,
     input_io_spec: dict[str, Any] | None = None,
     output_io_spec: dict[str, Any] | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     overall_start = time.time()
     k_max_primary, k_max_secondary, k_max_tertiary, k_resolution_primary, k_resolution_secondary, k_resolution_tertiary = _resolve_three_tier_k_parameters(
@@ -4025,6 +4447,7 @@ def compute_k_component_structure_factors_from_files(
         print("=" * 60, flush=True)
         print(f"K-COMPONENT STRUCTURE FACTOR CALCULATION: {label}", flush=True)
         print("=" * 60, flush=True)
+        print(f"resume from existing per-trajectory outputs: {'enabled' if resume else 'disabled'}", flush=True)
 
         k_magnitudes = np.linalg.norm(k_vectors_array, axis=1)
         tier_masks = _three_tier_masks_from_magnitudes(
@@ -4034,6 +4457,42 @@ def compute_k_component_structure_factors_from_files(
             k_max_tertiary,
         )
         selected_pairs = [(index + 1, coordinate_files[index]) for index in trajectory_indices]
+        expected_prefix = np.column_stack((k_vectors_array, k_magnitudes))
+        reused_reports: list[dict[str, Any]] = []
+        pairs_to_compute: list[tuple[int, str]] = []
+        for index, file_path in selected_pairs:
+            report_path = _single_trajectory_report_path(resolved_output_file, index)
+            if resume:
+                existing_report = _load_saved_trajectory_report_if_compatible(
+                    report_path=report_path,
+                    value_columns=(4,),
+                    io_spec=output_io_spec,
+                    default_mode="text",
+                    default_precision="double",
+                    expected_prefix=expected_prefix,
+                    expected_prefix_columns=(0, 1, 2, 3),
+                )
+                if existing_report is not None:
+                    frame_count, coord_count = _coordinate_report_metadata(
+                        file_path=file_path,
+                        input_io_spec=input_io_spec,
+                        coords_stride=coords_stride,
+                        frame_window=frame_window,
+                    )
+                    reused_reports.append(
+                        {
+                            "trajectory_index": int(index),
+                            "file_path": str(file_path),
+                            "frame_count": int(frame_count),
+                            "coord_count": int(coord_count),
+                            "elapsed_s": 0.0,
+                            "output_file": report_path,
+                            "reused": True,
+                        }
+                    )
+                    print(f"Reusing {label} per-trajectory output for trajectory {index}: {report_path}", flush=True)
+                    continue
+            pairs_to_compute.append((index, file_path))
         task_args = [
             (
                 index,
@@ -4054,15 +4513,23 @@ def compute_k_component_structure_factors_from_files(
                 status_log_path,
                 overall_start,
             )
-            for index, file_path in selected_pairs
+            for index, file_path in pairs_to_compute
         ]
-        stats = _run_report_tasks(
-            task_args=task_args,
-            worker=_compute_single_trajectory_directional_sk_report,
-            max_workers=max_workers,
+        computed_stats = (
+            _run_report_tasks(
+                task_args=task_args,
+                worker=_compute_single_trajectory_directional_sk_report,
+                max_workers=max_workers,
+                dataset_label=f"the {label} coordinate dataset",
+            )
+            if task_args
+            else None
+        )
+        stats = _combine_report_stats(
+            reused_reports=reused_reports,
+            computed_stats=computed_stats,
             dataset_label=f"the {label} coordinate dataset",
         )
-        expected_prefix = np.column_stack((k_vectors_array, k_magnitudes))
         sk_values = _average_saved_trajectory_outputs(
             reports=stats["reports"],
             value_columns=(4,),
@@ -4090,6 +4557,8 @@ def compute_k_component_structure_factors_from_files(
             default_precision="double",
         )
         print(f"\nSaved component S(k) output ({label}): {resolved_output_file}", flush=True)
+        print(f"reused files ({label}): {stats['reused_count']}", flush=True)
+        print(f"computed files ({label}): {stats['computed_count']}", flush=True)
 
         results.append(
             {
