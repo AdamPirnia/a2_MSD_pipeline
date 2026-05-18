@@ -63,6 +63,23 @@ def _resolve_three_tier_cell_dimensions(
     return dims  # type: ignore[return-value]
 
 
+def _resolve_real_cell_index(real_cell_index: Any | None = None) -> int:
+    if real_cell_index is None or str(real_cell_index).strip() == "":
+        return 1
+    index = int(real_cell_index)
+    if index not in (1, 2, 3):
+        raise ValueError("real_cell_index must be 1, 2, or 3.")
+    return index
+
+
+def _real_space_box_from_cell_dimensions(
+    cell_dimensions: tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]],
+    real_cell_index: Any | None = None,
+) -> tuple[int, np.ndarray]:
+    index = _resolve_real_cell_index(real_cell_index)
+    return index, np.array(cell_dimensions[index - 1], dtype=np.float64)
+
+
 def isotropic_structure_factor_db_density(
     r_flat: np.ndarray,
     k_vals: np.ndarray,
@@ -916,6 +933,8 @@ def _charge_dipole_isotropic_output_header(
     Lx: float,
     Ly: float,
     Lz: float,
+    real_cell_index: int,
+    real_cell_box: np.ndarray | tuple[float, float, float],
     cutoff_primary: float | None,
     cutoff_secondary: float | None,
     cutoff_tertiary: float | None,
@@ -953,7 +972,12 @@ def _charge_dipole_isotropic_output_header(
         f"Dipole positions stride: {int(dipole_positions_stride)}",
         f"Dipole vectors path: {dipole_vectors_pattern}",
         f"Dipole vectors stride: {int(dipole_vectors_stride)}",
-        f"Box lengths: Lx={_format_header_value(float(Lx))}, Ly={_format_header_value(float(Ly))}, Lz={_format_header_value(float(Lz))}",
+        f"Minimum-image box lengths: Lx={_format_header_value(float(Lx))}, Ly={_format_header_value(float(Ly))}, Lz={_format_header_value(float(Lz))}",
+        "Real-space minimum-image cell: "
+        f"Cell {int(real_cell_index)} "
+        f"({_format_header_value(float(real_cell_box[0]))}, "
+        f"{_format_header_value(float(real_cell_box[1]))}, "
+        f"{_format_header_value(float(real_cell_box[2]))})",
         f"k max values: K1={_format_header_value(float(k_max_primary))}, K2={_format_header_value(float(k_max_secondary))}, K3={_format_header_value(float(k_max_tertiary))}",
         f"k resolutions: res1={_format_header_value(float(k_resolution_primary))}, res2={_format_header_value(float(k_resolution_secondary))}, res3={_format_header_value(float(k_resolution_tertiary))}",
         f"Cutoffs: CO-1={_format_header_value(cutoff_primary)}, CO-2={_format_header_value(cutoff_secondary)}, CO-3={_format_header_value(cutoff_tertiary)}",
@@ -2406,6 +2430,7 @@ def compute_charge_dipole_structure_factor_from_files(
     Ly: float,
     Lz: float,
     cell_dimensions: Any | None = None,
+    real_cell_index: int = 1,
     shell_width: float,
     cutoff_primary: float | None = None,
     cutoff_secondary: float | None = None,
@@ -2442,7 +2467,7 @@ def compute_charge_dipole_structure_factor_from_files(
         k_resolution_tertiary,
     )
     resolved_cell_dimensions = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
-    box = np.array(resolved_cell_dimensions[0], dtype=np.float64)
+    resolved_real_cell_index, box = _real_space_box_from_cell_dimensions(resolved_cell_dimensions, real_cell_index)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
     if float(k_max_primary) < 0 or float(k_max_secondary) <= 0 or float(k_max_tertiary) <= 0:
@@ -2556,6 +2581,12 @@ def compute_charge_dipole_structure_factor_from_files(
     print(f"k resolution primary: {float(k_resolution_primary):.8f}", flush=True)
     print(f"k resolution secondary: {float(k_resolution_secondary):.8f}", flush=True)
     print(f"k resolution tertiary: {float(k_resolution_tertiary):.8f}", flush=True)
+    print(
+        "real-space minimum-image cell: "
+        f"Cell {resolved_real_cell_index} "
+        f"({float(box[0]):.8f}, {float(box[1]):.8f}, {float(box[2]):.8f})",
+        flush=True,
+    )
     print(f"directional k vectors: {int(k_vectors_array.shape[0])}", flush=True)
     print(f"shell width: {float(shell_width):.8f}", flush=True)
     for label, value in [
@@ -2925,6 +2956,7 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
         charge_values,
         k_magnitudes,
         box,
+        real_cell_index,
         k_max_primary,
         k_max_secondary,
         k_max_tertiary,
@@ -3096,6 +3128,8 @@ def _compute_single_charge_dipole_isotropic(args: tuple[Any, ...]) -> dict[str, 
             Lx=float(box_array[0]),
             Ly=float(box_array[1]),
             Lz=float(box_array[2]),
+            real_cell_index=int(real_cell_index),
+            real_cell_box=box_array,
             cutoff_primary=cutoff_primary,
             cutoff_secondary=cutoff_secondary,
             cutoff_tertiary=cutoff_tertiary,
@@ -3182,6 +3216,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     Ly: float,
     Lz: float,
     cell_dimensions: Any | None = None,
+    real_cell_index: int = 1,
     cutoff_primary: float | None = None,
     cutoff_secondary: float | None = None,
     cutoff_tertiary: float | None = None,
@@ -3217,7 +3252,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         k_resolution_tertiary,
     )
     resolved_cell_dimensions = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
-    box = np.array(resolved_cell_dimensions[0], dtype=np.float64)
+    resolved_real_cell_index, box = _real_space_box_from_cell_dimensions(resolved_cell_dimensions, real_cell_index)
     if np.any(box <= 0):
         raise ValueError("Lx, Ly, and Lz must all be positive.")
     if float(k_max_primary) < 0 or float(k_max_secondary) <= 0 or float(k_max_tertiary) <= 0:
@@ -3330,6 +3365,12 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     print(f"k resolution primary: {float(k_resolution_primary):.8f}", flush=True)
     print(f"k resolution secondary: {float(k_resolution_secondary):.8f}", flush=True)
     print(f"k resolution tertiary: {float(k_resolution_tertiary):.8f}", flush=True)
+    print(
+        "real-space minimum-image cell: "
+        f"Cell {resolved_real_cell_index} "
+        f"({float(box[0]):.8f}, {float(box[1]):.8f}, {float(box[2]):.8f})",
+        flush=True,
+    )
     print(f"isotropic k values: {int(k_magnitudes.shape[0])}", flush=True)
     for label, value in [
         ("cutoff 1", cutoff_primary),
@@ -3446,6 +3487,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
             charge_values,
             k_magnitudes,
             box,
+            resolved_real_cell_index,
             k_max_primary,
             k_max_secondary,
             k_max_tertiary,
@@ -3576,9 +3618,11 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         k_resolution_primary=float(k_resolution_primary),
         k_resolution_secondary=float(k_resolution_secondary),
         k_resolution_tertiary=float(k_resolution_tertiary),
-        Lx=float(Lx),
-        Ly=float(Ly),
-        Lz=float(Lz),
+        Lx=float(box[0]),
+        Ly=float(box[1]),
+        Lz=float(box[2]),
+        real_cell_index=int(resolved_real_cell_index),
+        real_cell_box=box,
         cutoff_primary=cutoff_primary,
         cutoff_secondary=cutoff_secondary,
         cutoff_tertiary=cutoff_tertiary,
