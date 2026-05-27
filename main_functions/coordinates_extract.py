@@ -270,7 +270,7 @@ def _read_vmd_temp_coordinate_header(handle, temp_file):
     return dtype, n_frames, n_columns, header_end - header_start
 
 
-def _stream_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec):
+def _stream_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec, conversion_chunk_rows=None):
     os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
 
     with open(temp_file, "rb") as handle:
@@ -286,10 +286,10 @@ def _stream_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec):
             )
 
         output_dtype = _output_dtype_for_spec(output_io_spec)
-        chunk_rows = os.environ.get("ADMDYNANLZ_CONVERT_CHUNK_ROWS", "8")
+        chunk_rows = os.environ.get("ADMDYNANLZ_CONVERT_CHUNK_ROWS", "8") if conversion_chunk_rows is None else conversion_chunk_rows
         try:
             chunk_rows = max(1, int(chunk_rows))
-        except ValueError:
+        except (TypeError, ValueError):
             chunk_rows = 8
 
         if output_io_spec["mode"] == "binary":
@@ -321,19 +321,21 @@ def _stream_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec):
         temp_output_file = f"{output_file}.writing"
         fmt = _text_format_string(output_io_spec)
         with open(temp_output_file, "w", encoding="utf-8") as out_handle:
-            for _ in range(n_frames):
-                chunk = np.fromfile(handle, dtype=temp_dtype, count=n_columns)
-                if chunk.size != n_columns:
+            for row_start in range(0, n_frames, chunk_rows):
+                rows = min(chunk_rows, n_frames - row_start)
+                chunk = np.fromfile(handle, dtype=temp_dtype, count=rows * n_columns)
+                if chunk.size != rows * n_columns:
                     raise ValueError(f"Unexpected EOF while reading VMD coordinate temp output: {temp_file}")
+                chunk = chunk.reshape(rows, n_columns)
                 if output_io_spec["precision"] == "custom":
                     chunk = np.round(chunk.astype(output_dtype, copy=False), int(output_io_spec["decimals"]))
                 elif chunk.dtype != output_dtype:
                     chunk = chunk.astype(output_dtype, copy=False)
-                np.savetxt(out_handle, chunk.reshape(1, n_columns), fmt=fmt, delimiter=" ")
+                np.savetxt(out_handle, chunk, fmt=fmt, delimiter=" ")
         os.replace(temp_output_file, output_file)
 
 
-def _finalize_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec, min_temp_mtime=None, status_path=None, wait_seconds=60):
+def _finalize_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec, min_temp_mtime=None, status_path=None, wait_seconds=60, conversion_chunk_rows=None):
     deadline = time.time() + max(0, wait_seconds)
     last_error = None
     while True:
@@ -344,7 +346,7 @@ def _finalize_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec,
                 raise FileNotFoundError(f"VMD did not update coordinate temp output: {temp_file}")
             if os.path.getsize(temp_file) <= 0:
                 raise ValueError(f"VMD wrote an empty coordinate temp output file: {temp_file}")
-            _stream_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec)
+            _stream_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec, conversion_chunk_rows)
             os.remove(temp_file)
             return
         except Exception as exc:
@@ -357,7 +359,7 @@ def _finalize_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec,
             time.sleep(1)
 
 
-def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, save_com=False, grouping_unit="residue", vmd=None, max_workers=None, dcd_indices=None, common_term="", stride=1, wrap_settings=None, output_io_spec=None):
+def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, save_com=False, grouping_unit="residue", vmd=None, max_workers=None, dcd_indices=None, common_term="", stride=1, wrap_settings=None, output_io_spec=None, vmd_frame_batch_size=None, conversion_chunk_rows=None):
     """
     Extracts raw XYZ coordinates from a series of DCD trajectories using VMD in parallel,
     by generating per-segment Tcl scripts, running them in batch, and saving
@@ -411,6 +413,10 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
     wrap_settings : dict, optional
         Optional pbctools wrapping configuration. When enabled, a `pbc wrap`
         command is inserted before coordinates are extracted.
+    vmd_frame_batch_size : int, optional
+        Number of saved frames loaded into VMD in each DCD batch.
+    conversion_chunk_rows : int, optional
+        Number of frame rows converted from the VMD temporary binary output at once.
     
     Side Effects
     ------------
@@ -487,6 +493,20 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
         raise ValueError("stride must be an integer")
     if stride < 1:
         raise ValueError("stride must be >= 1")
+
+    def normalize_optional_positive_int(value, label):
+        if value is None or str(value).strip() == "":
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} must be an integer >= 1") from exc
+        if parsed < 1:
+            raise ValueError(f"{label} must be >= 1")
+        return parsed
+
+    vmd_frame_batch_size = normalize_optional_positive_int(vmd_frame_batch_size, "VMD frame batch size")
+    conversion_chunk_rows = normalize_optional_positive_int(conversion_chunk_rows, "Python conversion chunk rows")
     
     # Determine indices to process
     if dcd_indices is None:
@@ -558,6 +578,7 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
             stride,
             wrap_settings,
             output_io_spec,
+            vmd_frame_batch_size,
         )
         if not success:
             print(f"ERROR: Failed to generate TCL script for coordinates chunk {i} due to pattern validation failure.")
@@ -575,7 +596,7 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
         # Submit all jobs
         future_to_index = {
             executor.submit(
-                _run_vmd_script, i, vmd, baseDir, output_pattern, common_term, output_io_spec
+                _run_vmd_script, i, vmd, baseDir, output_pattern, common_term, output_io_spec, conversion_chunk_rows
             ): i 
             for i in dcd_list
         }
@@ -631,6 +652,7 @@ def _write_tcl_script(
     stride=1,
     wrap_settings=None,
     output_io_spec=None,
+    vmd_frame_batch_size=None,
 ):
     """Write optimized TCL script for a single trajectory chunk."""
     
@@ -753,9 +775,10 @@ def _write_tcl_script(
     wrap_block = "\n".join(wrap_lines)
     temp_output_full_path = _vmd_coordinate_temp_path(output_full_path)
     temp_dtype = _vmd_temp_dtype_for_spec(normalized_output)
+    frame_batch_value = os.environ.get("ADMDYNANLZ_VMD_FRAME_BATCH_SIZE", "25") if vmd_frame_batch_size is None else vmd_frame_batch_size
     try:
-        frame_batch_size = max(1, int(os.environ.get("ADMDYNANLZ_VMD_FRAME_BATCH_SIZE", "25")))
-    except ValueError:
+        frame_batch_size = max(1, int(frame_batch_value))
+    except (TypeError, ValueError):
         frame_batch_size = 25
     output_open_block = "\n".join([
         f'set outfile [open "{_tcl_quote(temp_output_full_path)}" w]',
@@ -820,11 +843,23 @@ status "opened temp output {_tcl_quote(temp_output_full_path)} with $output_fram
         group_setup_block = f"""
 set grouping_unit "{_tcl_quote(grouping_unit)}"
 set atom_indices [$sel get index]
-set atom_groups [$sel get $grouping_unit]
+if {{$grouping_unit eq "residue"}} {{
+    set atom_group_segids [$sel get segid]
+    set atom_group_resids [$sel get resid]
+    set atom_groups [list]
+    foreach group_segid $atom_group_segids group_resid $atom_group_resids {{
+        lappend atom_groups [list $group_segid $group_resid]
+    }}
+}} else {{
+    set atom_group_values [$sel get $grouping_unit]
+    set atom_groups [list]
+    foreach group_value $atom_group_values {{
+        lappend atom_groups [list $group_value]
+    }}
+}}
 set group_order [list]
 set grouped_indices [dict create]
-foreach atom_index $atom_indices group_value $atom_groups {{
-    set group_key [list $group_value]
+foreach atom_index $atom_indices group_key $atom_groups {{
     if {{![dict exists $grouped_indices $group_key]}} {{
         lappend group_order $group_key
         dict set grouped_indices $group_key [list]
@@ -988,7 +1023,7 @@ exit 0
     return True
 
 
-def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", output_io_spec=None):
+def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", output_io_spec=None, conversion_chunk_rows=None):
     """Run a single VMD script and return results."""
     
     # Use the same naming convention as in _write_tcl_script
@@ -1064,10 +1099,11 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
                 _finalize_vmd_temp_coordinate_output(
                     temp_output_file,
                     output_file,
-                    normalized_output,
-                    min_temp_mtime=run_started_at,
-                    status_path=status_path,
-                )
+                normalized_output,
+                min_temp_mtime=run_started_at,
+                status_path=status_path,
+                conversion_chunk_rows=conversion_chunk_rows,
+            )
             except Exception as e:
                 error_msg = f"Converting VMD coordinate temp output failed: {e}"
                 write_vmd_log(error_msg)

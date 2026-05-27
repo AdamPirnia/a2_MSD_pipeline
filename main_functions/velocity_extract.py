@@ -554,14 +554,37 @@ if {{$selected_atoms == 0}} {{
     exit 1
 }}
 
-set group_values [$base_sel get $grouping_unit]
-set ordered_groups [list]
-foreach group_value $group_values {{
-    if {{[lsearch -exact $ordered_groups $group_value] < 0}} {{
-        lappend ordered_groups $group_value
+set atom_indices [$base_sel get index]
+if {{$grouping_unit eq "residue"}} {{
+    set atom_group_segids [$base_sel get segid]
+    set atom_group_resids [$base_sel get resid]
+    set atom_groups [list]
+    foreach group_segid $atom_group_segids group_resid $atom_group_resids {{
+        lappend atom_groups [list $group_segid $group_resid]
+    }}
+}} else {{
+    set atom_group_values [$base_sel get $grouping_unit]
+    set atom_groups [list]
+    foreach group_value $atom_group_values {{
+        lappend atom_groups [list $group_value]
     }}
 }}
-set num_groups [llength $ordered_groups]
+set group_order [list]
+set grouped_indices [dict create]
+foreach atom_index $atom_indices group_key $atom_groups {{
+    if {{![dict exists $grouped_indices $group_key]}} {{
+        lappend group_order $group_key
+        dict set grouped_indices $group_key [list]
+    }}
+    dict lappend grouped_indices $group_key $atom_index
+}}
+set group_sels [list]
+foreach group_key $group_order {{
+    set group_indices [dict get $grouped_indices $group_key]
+    set group_sel [atomselect top "index [join $group_indices {{ }}]"]
+    lappend group_sels $group_sel
+}}
+set num_groups [llength $group_sels]
 puts "Resolved $num_groups COM group(s)"
 
 if {{$num_groups <= 0}} {{
@@ -589,19 +612,16 @@ for {{set frame 0}} {{$frame < $nf}} {{incr frame $stride}} {{
     animate goto $frame
     set frameData ""
     
-    foreach group_value $ordered_groups {{
-        set group_selection "$target_selection and $grouping_unit [list $group_value]"
-        set sel [atomselect top $group_selection]
+    foreach sel $group_sels {{
+        $sel frame $frame
         if {{[$sel num] == 0}} {{
-            puts "ERROR: Group selection became empty at frame $frame: $group_selection"
-            $sel delete
+            puts "ERROR: Group selection became empty at frame $frame"
             close $outfile
             mol delete $traj
             exit 1
         }}
         set velcom [measure center $sel weight mass]
         append frameData [format " %.6f %.6f %.6f " [lindex $velcom 0] [lindex $velcom 1] [lindex $velcom 2]]
-        $sel delete
     }}
     
     puts $outfile $frameData
@@ -613,6 +633,9 @@ for {{set frame 0}} {{$frame < $nf}} {{incr frame $stride}} {{
 }}
 
 close $outfile
+foreach group_sel $group_sels {{
+    $group_sel delete
+}}
 mol delete $traj
 
 puts "Velocity extraction complete: $frame_count frames processed"

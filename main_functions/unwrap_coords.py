@@ -435,12 +435,24 @@ if {{$num_atoms == 0}} {{
     exit 1
 }}
 
-set atom_groups [$sel get $grouping_unit]
+if {{$grouping_unit eq "residue"}} {{
+    set atom_group_segids [$sel get segid]
+    set atom_group_resids [$sel get resid]
+    set atom_groups [list]
+    foreach group_segid $atom_group_segids group_resid $atom_group_resids {{
+        lappend atom_groups [list $group_segid $group_resid]
+    }}
+}} else {{
+    set atom_group_values [$sel get $grouping_unit]
+    set atom_groups [list]
+    foreach group_value $atom_group_values {{
+        lappend atom_groups [list $group_value]
+    }}
+}}
 set group_order [list]
 set grouped_positions [dict create]
 set selected_position 0
-foreach group_value $atom_groups {{
-    set group_key [list $group_value]
+foreach group_key $atom_groups {{
     if {{![dict exists $grouped_positions $group_key]}} {{
         lappend group_order $group_key
         dict set grouped_positions $group_key [list]

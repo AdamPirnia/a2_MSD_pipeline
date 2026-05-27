@@ -147,7 +147,7 @@ Practical notes:
 
 ### DCD Selection
 
-Any `DCD Selection (optional)` field lets you restrict processing to only some trajectory indices.
+Any `DCD Selection` field is optional and lets you restrict processing to only some trajectory indices.
 
 Supported examples:
 
@@ -236,14 +236,18 @@ Fields:
 - `Target Selections`: VMD atom selection string, such as `water`, `protein`, or a more specific selection
 - `?` help button: opens the VMD atom-selection reference in your default browser
 - `VMD path`: full path to the VMD executable
-- `DCD Selection (optional)`: optional subset of DCD indices to extract
-- `Stride (optional)`: frame sampling stride; use `1` for every frame, `10` for every tenth frame
+- `DCD Selection`: optional subset of DCD indices to extract
+- `Stride`: required frame sampling stride; use `1` for every frame, `10` for every tenth frame
+- `Frame Chunks: VMD`: required number of saved frames loaded into VMD per Step 1 DCD batch
+- `Frame Chunks: Python`: required number of frame rows converted from VMD temporary binary output at once
 
 Options:
 
 - `Use Parallel VMD`: runs multiple extraction jobs in parallel when possible
 - `Wrap Coordinates`: applies VMD `pbctools` wrapping during extraction
 - `Settings`: opens the wrapping popup where you can configure shape, centering, compound mode, atom selection, and optional wrap flags
+
+When Step 1 `COM` output is enabled and `Grouping Unit = residue`, residues are grouped by VMD `segid + resid` in first-occurrence atom order. This avoids VMD-internal `residue` numbering behavior that can treat each atom as a separate residue for some PSF/PDB inputs.
 
 ### What `Wrap Coordinates` does
 
@@ -272,9 +276,9 @@ Fields:
 - `Output Pattern`: full output `path + filename + extension` pattern for continuous-coordinate files
 - `XSC file`: file containing simulation box dimensions
 - `Num atoms`: total number of atoms in each extracted coordinate file
-- `Interval (optional)`: optional frame interval expression to restrict the processed frame range
-- `Stride (optional)`: frame stride used during unwrapping
-- `DCD Selection (optional)`: optional subset of DCD indices to process
+- `Interval`: optional frame interval expression to restrict the processed frame range
+- `Stride`: frame stride used during unwrapping
+- `DCD Selection`: optional subset of DCD indices to process
 - `Chunk Size`: memory-related processing chunk size, or `auto`
 
 Option:
@@ -287,7 +291,7 @@ When `Fix 1st Frame` is checked, Step 2 enables extra metadata fields in the Opt
 - `PSF Pattern`: PSF file pattern used to resolve atom grouping for the first-frame repair
 - `Target Selection`: VMD atom selection matching the atom order in the Step 2 coordinate input files
 - `VMD Path`: VMD executable used to resolve the PSF and atom selection
-- `Grouping Unit`: grouping used to define each molecule or unit to repair; currently `residue`, `chain`, or `segname`
+- `Grouping Unit`: grouping used to define each molecule or unit to repair; currently `residue`, `chain`, or `segname`; `residue` groups by VMD `segid + resid`
 
 ### What `Fix 1st Frame` does
 
@@ -330,8 +334,8 @@ Fields:
 - `Target Selection`: atom selection defining which atoms participate in the COM calculation
 - `VMD Path`: VMD executable used to interpret the selection and PSF topology metadata
 - `COM Mode`: choose `individual` or `collective`
-- `Grouping Unit`: used only in `individual` mode; currently `residue`, `chain`, or `segname`
-- `DCD Selection (optional)`: optional subset of DCD indices to process
+- `Grouping Unit`: used only in `individual` mode; currently `residue`, `chain`, or `segname`; `residue` groups by VMD `segid + resid`
+- `DCD Selection`: optional subset of DCD indices to process
 
 Options:
 
@@ -353,7 +357,7 @@ If `COM Mode = individual`:
 
 Examples:
 
-- if `Grouping Unit = residue`, one COM is computed for each residue inside the final selection
+- if `Grouping Unit = residue`, one COM is computed for each `segid + resid` residue inside the final selection
 - if `Grouping Unit = chain`, one COM is computed for each chain inside the final selection
 - if the target selection is `same residue as resname TIP3 and index 10 to 90`, the final atom list follows VMD selection semantics before COMs are calculated
 
@@ -393,10 +397,10 @@ Fields:
 - `VELDCD Pattern`: pattern for velocity-trajectory files
 - `Output Pattern`: full output `path + filename + extension` pattern for generated velocity files
 - `Target Selection`: VMD atom-selection string for the atoms whose COM velocities should be extracted
-- `Grouping Unit`: grouping used to define each COM velocity, currently `residue`, `chain`, or `segname`
+- `Grouping Unit`: grouping used to define each COM velocity, currently `residue`, `chain`, or `segname`; `residue` groups by VMD `segid + resid`
 - `Stride`: frame sampling stride for velocity extraction
 - `VMD Executable Path`: full path to the VMD executable
-- `DCD Selection (optional)`: optional subset of DCD indices to process
+- `DCD Selection`: optional subset of DCD indices to process
 
 Notes:
 
@@ -427,7 +431,7 @@ Field:
 - `VMD Path`: full path to the VMD executable
 - `Stride`: frame sampling stride used by both individual and collective dipole calculations
 - `Dipole Unit`: output dipole unit, either `Debye` or `e·Å`
-- `DCD Selection (optional)`: optional subset of DCD indices to process
+- `DCD Selection`: optional subset of DCD indices to process
 
 ### If `Calculation Method = individual`
 
@@ -436,7 +440,7 @@ Use these fields:
 - `Coordinates Pattern`: full input `path + filename + extension` pattern for coordinate files
 - `All neutral particles`: check only if every net charge per selected group is zero
 - `COM Patterns`: full input `path + filename + extension` pattern for center-of-mass files used when `All neutral particles` is not checked
-- `Grouping Unit`: grouping used to define each individual dipole: `residue`, `chain`, `segname`, or `all`
+- `Grouping Unit`: grouping used to define each individual dipole: `residue`, `chain`, `segname`, or `all`; `residue` groups by VMD `segid + resid`
 - `Dipole Vectors Pattern`: full output `path + filename + extension` pattern for dipole-vector files
 - `Magnitudes Pattern`: optional full output `path + filename + extension` pattern for dipole-magnitude files
 - checkbox next to `Magnitudes Pattern`: enables or disables dipole-magnitude calculation and saving
@@ -459,7 +463,7 @@ Output units:
 How individual molecules are distinguished:
 
 - this workflow groups atoms using `Grouping Unit`
-- if `Grouping Unit = residue`, one dipole is computed for each residue inside the final selection
+- if `Grouping Unit = residue`, one dipole is computed for each `segid + resid` residue inside the final selection
 - if `Grouping Unit = chain`, one dipole is computed for each chain inside the final selection
 - if `Grouping Unit = all`, one dipole is computed from all selected/input coordinates
 - groups do not need to have the same number of atoms
@@ -520,8 +524,8 @@ Fields:
 - `Alpha2 Output File Pattern`: shown when `Calculation Type = alpha2_msd`; full output `path + filename + extension` for `α₂(t)` results
 - `MSD Output File Pattern`: shown when `Calculation Type = alpha2_msd`; full output `path + filename + extension` for MSD results
 - `Anisotropic NGP Output File Pattern`: shown when `Calculation Type = alpha_xz`; full output `path + filename + extension` used as the base for anisotropic NGP result files
-- `Min frames (optional)`: optional minimum number of frames expected in each input file
-- `DCD Selection (optional)`: optional subset of DCD indices to process
+- `Min frames`: optional minimum number of frames expected in each input file
+- `DCD Selection`: optional subset of DCD indices to process
 
 Option:
 
@@ -599,7 +603,7 @@ Fields:
 - `Max Length (num. frames)`: largest lag index to evaluate
 - `Step (between frames)`: physical step associated with one frame increment
 - `Coefficient`: scaling factor used only for the saved variance output; the standard choice is `3`
-- `DCD Selection (optional)`: optional subset of indices to process
+- `DCD Selection`: optional subset of indices to process
 - `Data Type`: choose `scalar` or `vector`
 - `Particle Count`: choose `single` or `multiple`
 - `Correlation Function Mode`: choose `Subtracting Mean` or `Not Subtracting Mean`
@@ -914,8 +918,8 @@ All three use saved coordinate arrays, not raw DCD files.
 - `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`; each cell-size value is used only for the matching cutoff tier
 - `k Max 1`, `k Max 2`, `k Max 3`: upper bounds for the first, second, and third reciprocal-space tiers
 - `Resolution: res. 1`, `res. 2`, `res. 3`: minimum `|k|` spacing kept in the first, second, and third reciprocal-space tiers
-- `Trajectory desired length (optional)`: a single integer means use the first `N` frames from each file; `range(start, stop[, step])` means use that frame window from each file
-- `Trajectory Selection`: optional zero-based subset of trajectory indices to process from `Number of Trajectories`; supports the same syntax as `DCD Selection (optional)`
+- `Trajectory desired length`: optional field; a single integer means use the first `N` frames from each file; `range(start, stop[, step])` means use that frame window from each file
+- `Trajectory Selection`: optional zero-based subset of trajectory indices to process from `Number of Trajectories`; supports the same syntax as `DCD Selection`
 - `Chunk Sizes`: opens the dialog for density-structure-factor chunk sizes
 
 ### What The Three `k` Tiers Mean
@@ -1065,7 +1069,7 @@ This tab computes charge-dipole structure factors from:
 
 The charge-coordinate, dipole-position, and dipole-vector patterns must resolve to the same number of files.
 
-The charge-values file is normally a constant-charge table. If the file has more than one column, the calculation uses the last column as the charge value. For two-column files, the first column may be a charge-site index for human bookkeeping, but it is not used to reorder coordinates; charge rows are expected to match the charge-coordinate site order. If `Mask Charge Index/Indices (optional)` is set, those charge values are set to `0.0` before nonzero-charge filtering.
+The charge-values file is normally a constant-charge table. If the file has more than one column, the calculation uses the last column as the charge value. For two-column files, the first column may be a charge-site index for human bookkeeping, but it is not used to reorder coordinates; charge rows are expected to match the charge-coordinate site order. If optional `Mask Charge Index/Indices` is set, those charge values are set to `0.0` before nonzero-charge filtering.
 
 Charge sites with charge exactly `0.0` are ignored before the charge-dipole calculation starts. This means they do not contribute to `Sqp(k)`, and they also do not define cutoff neighborhoods. With a cutoff enabled, only dipoles within the cutoff distance of nonzero charge sites are included.
 
@@ -1082,9 +1086,9 @@ Charge sites with charge exactly `0.0` are ignored before the charge-dipole calc
 - `Isotropic Output Path`: isotropic charge-dipole output file
 - `Directional Output Path`: directional charge-dipole output file; required only in directional mode
 - `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`
-- `Mask Charge Index/Indices (optional)`: optional zero-based charge index or comma-separated charge indices whose charge values are set to `0.0` before calculation; for example, `0, 67` masks Python entries `charges[0]` and `charges[67]`; the charge-coordinate array is not changed
-- `Trajectory desired length (optional)`: same syntax as the density tab
-- `Trajectory Selection`: optional zero-based subset of trajectory indices to process from `Number of Trajectories`; supports the same syntax as `DCD Selection (optional)`
+- `Mask Charge Index/Indices`: optional zero-based charge index or comma-separated charge indices whose charge values are set to `0.0` before calculation; for example, `0, 67` masks Python entries `charges[0]` and `charges[67]`; the charge-coordinate array is not changed
+- `Trajectory desired length`: optional field with the same syntax as the density tab
+- `Trajectory Selection`: optional zero-based subset of trajectory indices to process from `Number of Trajectories`; supports the same syntax as `DCD Selection`
 
 ### Charge-Dipole `k` Parameters
 
@@ -1359,7 +1363,7 @@ The `Radial Distribution Function` module generates scripts for computing `g(r)`
 - `stride`: frame stride applied before RDF calculation
 - `Output Path`: main RDF output file
 - `Cell Dimensions`: one cubic length or three dimensions `Lx Ly Lz`; used for orthorhombic minimum-image distances
-- `r Max (optional)`: maximum RDF distance. If empty, the calculation uses half of the smallest cell dimension.
+- `r Max`: optional maximum RDF distance. If empty, the calculation uses half of the smallest cell dimension.
 - `Bin Width`: RDF radial bin width
 - `Chunkify`: enables the chunk-size fields. If unchecked, both chunk sizes are treated as `1`.
 - `Chunk Size 1`: number of Selection 1 particles processed at once during pair-distance calculation
@@ -1367,7 +1371,7 @@ The `Radial Distribution Function` module generates scripts for computing `g(r)`
 - `Selection 1`: optional zero-based particle-index subset for RDF centers. Empty means all particles.
 - `Selection 2`: optional zero-based particle-index subset for RDF partners. Empty means all particles.
 - `Exclude Self-Pairs`: excludes pairs where Selection 1 and Selection 2 refer to the same zero-based particle index
-- `Trajectory desired length (optional)`: a single integer uses the first `N` frames from each file; `range(start, stop[, step])` uses zero-based frame indices
+- `Trajectory desired length`: optional field; a single integer uses the first `N` frames from each file; `range(start, stop[, step])` uses zero-based frame indices
 - `Trajectory Selection`: optional zero-based subset of coordinate-file indices
 
 `Selection 1`, `Selection 2`, and `Trajectory Selection` support comma lists, inclusive dash ranges, Python lists, and `range(...)`, such as `0,3,5`, `0-10`, `[0, 2, 4]`, and `range(0, 10)`.

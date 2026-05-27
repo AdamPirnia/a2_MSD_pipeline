@@ -104,10 +104,21 @@ def _extract_selection_metadata(baseDir, psf_pattern, file_index, target_selecti
     if not os.path.exists(psf_full):
         raise FileNotFoundError(f"PSF file not found: {psf_full}")
 
+    if grouping_unit == "residue":
+        group_tcl = """set group_segids [$sel get segid]
+set group_resids [$sel get resid]
+set groups [list]
+foreach group_segid $group_segids group_resid $group_resids {
+    lappend groups "$group_segid:$group_resid"
+}
+"""
+    else:
+        group_tcl = f"set groups [$sel get {grouping_unit}]\n"
+
     script_content = f"""set PSF "{_tcl_quote(psf_full)}"
 set molid [mol new $PSF type psf waitfor all]
 set sel [atomselect $molid "{_tcl_quote(target_selection)}"]
-set groups [$sel get {grouping_unit}]
+{group_tcl.rstrip()}
 set masses [$sel get mass]
 puts "__META_BEGIN__"
 foreach group $groups mass $masses {{

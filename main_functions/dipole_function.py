@@ -95,6 +95,14 @@ foreach atom_index [$sel get index] {
     lappend groups all
 }
 """
+    elif grouping_unit == "residue":
+        group_tcl = """set group_segids [$sel get segid]
+set group_resids [$sel get resid]
+set groups [list]
+foreach group_segid $group_segids group_resid $group_resids {
+    lappend groups "$group_segid:$group_resid"
+}
+"""
     else:
         group_tcl = f"set groups [$sel get {grouping_unit}]\n"
 
