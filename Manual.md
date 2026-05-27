@@ -20,7 +20,7 @@ Paths containing spaces, parentheses, and similar non-regular characters are sup
 
 - `*` is replaced by the value of `Common Term 1`
 - `**` is replaced by the value of `Common Term 2`
-- `{i}` is replaced by the DCD index
+- `{i}` is replaced by the zero-based DCD, trajectory, or coordinate-file index
 
 Example with one common term:
 
@@ -583,6 +583,7 @@ This module generates scripts for time-correlation analysis from numeric array f
 - `Base Directory`: root folder for correlation inputs and outputs
 - `Num. Corr. Functions`: total number of indexed correlation functions to calculate
 - `Number of Particles`: retained for consistency with other modules
+- `Particles Selection`: optional zero-based subset of particles to use from multi-particle inputs; supports forms such as `0`, `1,3,5`, `0-10`, `[0, 2, 4]`, and `range(0, 10)`
 - `Common Terms`: two optional shared replacement fields for `*` and `**` in file patterns
 - `Max Workers`: maximum independent correlation functions to calculate at the same time
 
@@ -672,6 +673,7 @@ For a standard coordinate-to-analysis workflow:
 4. Use `Correlation Functions` when you already have numeric scalar or vector arrays and want correlation-analysis scripts for them.
 5. Use `Diffusion constant` when you already have saved VACF files, MSD files, or both, and want diffusion estimates from either route.
 6. Use `Static Structure Factor` when you want isotropic `S(k)` from saved coordinate arrays.
+7. Use `Radial Distribution Function` when you want `g(r)` from saved coordinate or COM arrays.
 
 ## Module 5: Diffusion Constant
 
@@ -1063,7 +1065,7 @@ This tab computes charge-dipole structure factors from:
 
 The charge-coordinate, dipole-position, and dipole-vector patterns must resolve to the same number of files.
 
-The charge-values file is normally a constant-charge table. If the file has more than one column, the calculation uses the last column as the charge value. For two-column files, the first column may be a charge-site index for human bookkeeping, but it is not used to reorder coordinates; charge rows are expected to match the charge-coordinate site order. If `Mask Charge Number(s) (optional)` is set, those charge values are set to `0.0` before nonzero-charge filtering.
+The charge-values file is normally a constant-charge table. If the file has more than one column, the calculation uses the last column as the charge value. For two-column files, the first column may be a charge-site index for human bookkeeping, but it is not used to reorder coordinates; charge rows are expected to match the charge-coordinate site order. If `Mask Charge Index/Indices (optional)` is set, those charge values are set to `0.0` before nonzero-charge filtering.
 
 Charge sites with charge exactly `0.0` are ignored before the charge-dipole calculation starts. This means they do not contribute to `Sqp(k)`, and they also do not define cutoff neighborhoods. With a cutoff enabled, only dipoles within the cutoff distance of nonzero charge sites are included.
 
@@ -1080,7 +1082,7 @@ Charge sites with charge exactly `0.0` are ignored before the charge-dipole calc
 - `Isotropic Output Path`: isotropic charge-dipole output file
 - `Directional Output Path`: directional charge-dipole output file; required only in directional mode
 - `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`
-- `Mask Charge Number(s) (optional)`: optional one-based charge number or comma-separated charge numbers whose charge values are set to `0.0` before calculation; for example, `1, 68` masks Python entries `charges[0]` and `charges[67]`; the charge-coordinate array is not changed
+- `Mask Charge Index/Indices (optional)`: optional zero-based charge index or comma-separated charge indices whose charge values are set to `0.0` before calculation; for example, `0, 67` masks Python entries `charges[0]` and `charges[67]`; the charge-coordinate array is not changed
 - `Trajectory desired length (optional)`: same syntax as the density tab
 - `Trajectory Selection`: optional zero-based subset of trajectory indices to process from `Number of Trajectories`; supports the same syntax as `DCD Selection (optional)`
 
@@ -1294,7 +1296,7 @@ With resume enabled, the directional per-trajectory report is the file that cont
 
 ### Charge-Dipole Isotropic Output
 
-Direct isotropic charge-dipole mode writes one main output file. It begins with `#` header lines that record input paths, strides, box lengths, `k` tiers, cutoff settings, masked charge number(s), frame counts, and trajectory counts. Numeric loaders such as NumPy skip those header lines by default.
+Direct isotropic charge-dipole mode writes one main output file. It begins with `#` header lines that record input paths, strides, box lengths, `k` tiers, cutoff settings, masked zero-based charge index/indices, frame counts, and trajectory counts. Numeric loaders such as NumPy skip those header lines by default.
 
 Rows:
 
@@ -1338,6 +1340,46 @@ For long structure-factor jobs, `status.log` records periodic progress lines wit
 Per-trajectory or per-file-set reports are saved next to the main output using names derived from the output path, such as `output_1.dat` and `output_2.dat`. These reports use the same column layout as the corresponding main output, but contain only one trajectory or one charge/dipole file set.
 
 When resume is enabled and an existing per-trajectory report has the wrong number of columns, a different `k` grid, or a missing/mismatched charge-dipole dipole-count file, the run stops with a clear resume error instead of silently mixing incompatible data.
+
+## Extra Module: Radial Distribution Function
+
+The `Radial Distribution Function` module generates scripts for computing `g(r)` from saved coordinate arrays.
+
+## RDF Common Parameters
+
+- `Base Directory`: root folder for RDF inputs and relative outputs
+- `Number of Coordinate Files`: number of indexed coordinate files; indices are zero-based, from `0` to `N - 1`
+- `Common Terms`: two optional replacement fields for `*` and `**`
+- `Max Workers`: maximum coordinate files to process at the same time
+- `Smart Optimization`: estimates RDF pair workload and memory from frames, particle count, selections, available memory, and CPU workers; it applies recommended `Max Workers`, `Chunk Size 1`, `Chunk Size 2`, and SLURM CPU/memory/walltime fields
+
+## RDF Fields
+
+- `Coordinate Path`: coordinate-file pattern. Text inputs may be flattened as `x1 y1 z1 x2 y2 z2 ...`; binary inputs may also use shape `(frames, particles, 3)`.
+- `stride`: frame stride applied before RDF calculation
+- `Output Path`: main RDF output file
+- `Cell Dimensions`: one cubic length or three dimensions `Lx Ly Lz`; used for orthorhombic minimum-image distances
+- `r Max (optional)`: maximum RDF distance. If empty, the calculation uses half of the smallest cell dimension.
+- `Bin Width`: RDF radial bin width
+- `Chunkify`: enables the chunk-size fields. If unchecked, both chunk sizes are treated as `1`.
+- `Chunk Size 1`: number of Selection 1 particles processed at once during pair-distance calculation
+- `Chunk Size 2`: number of Selection 2 particles processed at once during pair-distance calculation
+- `Selection 1`: optional zero-based particle-index subset for RDF centers. Empty means all particles.
+- `Selection 2`: optional zero-based particle-index subset for RDF partners. Empty means all particles.
+- `Exclude Self-Pairs`: excludes pairs where Selection 1 and Selection 2 refer to the same zero-based particle index
+- `Trajectory desired length (optional)`: a single integer uses the first `N` frames from each file; `range(start, stop[, step])` uses zero-based frame indices
+- `Trajectory Selection`: optional zero-based subset of coordinate-file indices
+
+`Selection 1`, `Selection 2`, and `Trajectory Selection` support comma lists, inclusive dash ranges, Python lists, and `range(...)`, such as `0,3,5`, `0-10`, `[0, 2, 4]`, and `range(0, 10)`.
+
+## RDF Output
+
+The RDF output has four columns:
+
+- column 1: radial bin center `r`
+- column 2: radial distribution function `g(r)`
+- column 3: running coordination number
+- column 4: `hist`, the raw pair-count histogram before RDF normalization
 
 ## Final notes
 

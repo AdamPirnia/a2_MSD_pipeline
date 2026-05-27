@@ -9,7 +9,7 @@ ADMDynAnlz is a graphical workflow tool for post-processing molecular dynamics t
 
 The current distributed application is the Qt GUI.
 
-The application currently provides six GUI modules:
+The application currently provides seven GUI modules:
 
 - `Coordinates extraction`
 - `Velocities and Dipoles`
@@ -17,6 +17,7 @@ The application currently provides six GUI modules:
 - `Correlation Functions`
 - `Diffusion constant`
 - `Static Structure Factor`
+- `Radial Distribution Function`
 
 Detailed section-by-section instructions are available in [Manual.md](Manual.md).
 A dedicated preparation and download guide is available in [Run_Prep.md](Run_Prep.md).
@@ -259,6 +260,25 @@ The generated workflows write the requested density `S(k)` or charge-dipole `Sqp
 </p>
 
 Charge-dipole calculations include directional, isotropic, and optional small-k approximation modes. The full formulas and sign conventions are documented in [detailed_readme.md](detailed_readme.md).
+
+### 7. Radial Distribution Function
+This Extra module generates workflows for radial distribution functions, `g(r)`, from saved coordinate arrays such as extracted COM trajectories.
+
+Current behavior highlights:
+
+- `Selection 1` and `Selection 2` use zero-based particle indices
+- empty selections mean all particles in the input coordinate files
+- `Exclude Self-Pairs` can remove self distances when selections overlap
+- multiple coordinate files can be accumulated into one total RDF
+- `Chunkify` exposes `Chunk Size 1` and `Chunk Size 2` for pair-distance chunking
+- Smart Optimization can recommend workers, chunk sizes, and SLURM resources
+
+Typical outputs:
+
+- radial bin center `r`
+- radial distribution function `g(r)`
+- running coordination number
+- raw pair-count histogram `hist`
 
 ## Documentation
 

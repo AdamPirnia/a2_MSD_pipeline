@@ -18,7 +18,7 @@ $$
 }
 $$
 
-where \(\mathbf L=(L_x,L_y,L_z)\). Static-structure-factor real-space cutoffs and cell-list searches use the same minimum-image geometry when box dimensions are provided; see [Module 6: Static Structure Factor](Manual.md#module-6-static-structure-factor).
+where \(\mathbf L=(L_x,L_y,L_z)\). Static-structure-factor real-space cutoffs and RDF pair distances use the same minimum-image geometry when box dimensions are provided; see [Module 6: Static Structure Factor](Manual.md#module-6-static-structure-factor) and [Extra Module: Radial Distribution Function](Manual.md#extra-module-radial-distribution-function).
 
 ## Coordinates and Centers of Mass
 
@@ -240,6 +240,44 @@ D_{\mathrm{MSD}} =
 $$
 
 When enabled, the finite-size correction is applied after the raw diffusion estimate; the required GUI fields and output records are listed in [Infinite Size Correction Parameters](Manual.md#infinite-size-correction-parameters) and [Infinite Size Correction Output](Manual.md#infinite-size-correction-output).
+
+## Radial Distribution Functions
+
+The RDF workflow is described in [Extra Module: Radial Distribution Function](Manual.md#extra-module-radial-distribution-function), [RDF Fields](Manual.md#rdf-fields), and [RDF Output](Manual.md#rdf-output).
+
+For two selections \(A\) and \(B\), the software accumulates minimum-image pair distances between particles in `Selection 1` and particles in `Selection 2`. Empty selections mean all particles. With `Exclude Self-Pairs` enabled, pairs whose zero-based particle indices are identical are removed before histogramming.
+
+The shell volume for a radial bin \([r_i,r_{i+1})\) is:
+
+$$
+{\Huge
+\Delta V_i =
+\frac{4\pi}{3}\left(r_{i+1}^3-r_i^3\right)
+}
+$$
+
+The RDF reported by the generated workflow is normalized as:
+
+$$
+{\Huge
+g(r_i)=
+\frac{H_i}
+{N_{\mathrm{frames}}\,N_A\,\rho_B\,\Delta V_i}
+}
+$$
+
+where \(H_i\) is the raw pair-count histogram for bin \(i\), \(N_A\) is the size of `Selection 1`, and \(\rho_B=N_B/V\) is the number density of `Selection 2` in the orthorhombic cell volume \(V=L_xL_yL_z\). Multiple coordinate files are accumulated into the same histogram before this normalization, so split trajectory pieces can produce one total RDF.
+
+The running coordination number is:
+
+$$
+{\Huge
+N(r_n)=
+\sum_{i=0}^{n} g(r_i)\,\rho_B\,\Delta V_i
+}
+$$
+
+The output also includes `hist`, the raw pair-count histogram before RDF normalization.
 
 ## Density Structure Factors
 

@@ -986,7 +986,7 @@ def _charge_dipole_isotropic_output_header(
         f"Dipoles per frame: {dipole_count}",
         f"Total frames accumulated: {int(frame_count)}",
         f"Trajectories summed: {int(trajectory_count)}",
-        f"Masked charge number(s): {_format_header_value(delete_residue_index)}",
+        f"Masked zero-based charge index/indices: {_format_header_value(delete_residue_index)}",
         f"Trajectory desired length: {frame_window_text}",
         f"Trajectory selection: {_format_header_value(trajectory_selection)}",
     ]
@@ -1655,10 +1655,7 @@ def _charge_mask_indices(mask_spec: Any, charge_count: int) -> list[int]:
     if charge_count <= 0:
         return []
     if isinstance(mask_spec, (int, np.integer)):
-        charge_number = int(mask_spec)
-        if charge_number <= 0:
-            raise IndexError("Charge numbers to mask are one-based and must be at least 1.")
-        masked_indices = [charge_number - 1]
+        masked_indices = [int(mask_spec)]
     elif isinstance(mask_spec, (list, tuple, set, np.ndarray)):
         masked_indices = []
         for item in mask_spec:
@@ -1672,16 +1669,13 @@ def _charge_mask_indices(mask_spec: Any, charge_count: int) -> list[int]:
         for token in re.split(r"[\s,]+", text):
             if not token:
                 continue
-            charge_number = int(token)
-            if charge_number <= 0:
-                raise IndexError("Charge numbers to mask are one-based and must be at least 1.")
-            masked_indices.append(charge_number - 1)
+            masked_indices.append(int(token))
 
     for masked_index in masked_indices:
         if masked_index < 0 or masked_index >= charge_count:
             raise IndexError(
-                f"Charge number to mask ({masked_index + 1}) is outside the valid range "
-                f"1-{charge_count}."
+                f"Charge index to mask ({masked_index}) is outside the valid zero-based range "
+                f"0-{charge_count - 1}."
             )
     return sorted(set(masked_indices))
 
@@ -2610,7 +2604,7 @@ def compute_charge_dipole_structure_factor_from_files(
         flush=True,
     )
     print(f"resume from existing per-trajectory outputs: {'enabled' if resume else 'disabled'}", flush=True)
-    print(f"masked charge number(s): {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
+    print(f"masked zero-based charge index/indices: {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
     print(f"active nonzero charge sites: {active_charge_count}", flush=True)
     if frame_window is None:
         print("trajectory desired length: full trajectory", flush=True)
@@ -3394,7 +3388,7 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
     )
     print(f"max workers: {int(max_workers)}", flush=True)
     print(f"resume from existing per-trajectory outputs: {'enabled' if resume else 'disabled'}", flush=True)
-    print(f"masked charge number(s): {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
+    print(f"masked zero-based charge index/indices: {delete_residue_index if delete_residue_index is not None else 'none'}", flush=True)
     print(f"active nonzero charge sites: {active_charge_count}", flush=True)
     if frame_window is None:
         print("trajectory desired length: full trajectory", flush=True)
