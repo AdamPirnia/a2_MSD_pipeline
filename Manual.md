@@ -174,6 +174,8 @@ If a section has a `Skip` checkbox, checking it tells the software not to genera
 
 The input prompts are different in each module so the recommendation matches that module’s workflow.
 
+For Module 1 Step 3, `COM groups` is optional. If you know the number of COM output groups resolved by the Step 3 PSF selection and grouping unit, enter it for a more accurate memory estimate. If left blank, the optimizer assumes the conservative worst case of up to one output group per selected atom.
+
 ### SLURM Submission Parameters
 
 This section exists in all modules. It controls whether a SLURM submit script is generated and what resource requests that script contains.
@@ -1365,6 +1367,7 @@ The `Radial Distribution Function` module generates scripts for computing `g(r)`
 - `Cell Dimensions`: one cubic length or three dimensions `Lx Ly Lz`; used for orthorhombic minimum-image distances
 - `r Max`: optional maximum RDF distance. If empty, the calculation uses half of the smallest cell dimension.
 - `Bin Width`: RDF radial bin width
+- `Density-Normalize`: includes Selection 2 density in the RDF denominator. If unchecked, column 2 is a shell-volume-normalized radial number-density profile around Selection 1 instead of a bulk-density-normalized RDF.
 - `Chunkify`: enables the chunk-size fields. If unchecked, both chunk sizes are treated as `1`.
 - `Chunk Size 1`: number of Selection 1 particles processed at once during pair-distance calculation
 - `Chunk Size 2`: number of Selection 2 particles processed at once during pair-distance calculation
@@ -1381,7 +1384,7 @@ The `Radial Distribution Function` module generates scripts for computing `g(r)`
 The RDF output has four columns:
 
 - column 1: radial bin center `r`
-- column 2: radial distribution function `g(r)`
+- column 2: radial distribution function `g(r)` when `Density-Normalize` is checked; radial number-density profile when unchecked
 - column 3: running coordination number
 - column 4: `hist`, the raw pair-count histogram before RDF normalization
 

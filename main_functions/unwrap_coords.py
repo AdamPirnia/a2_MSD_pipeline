@@ -141,6 +141,8 @@ def unwrapper(
     vmd=None,
     grouping_unit="residue",
     repair_first_frame=False,
+    wrap_groups_into_cell=False,
+    wrap_center="cell",
 ):
     """
     Read a series of coordinates directly extracted from MD trajectories, unwrap 
@@ -156,7 +158,8 @@ def unwrapper(
             (disp -= box * round(disp / box)).
          d. Cumulatively sums the corrected displacements to produce unwrapped
             trajectories using np.cumsum for maximum efficiency.
-         e. Saves the unwrapped coordinates to the output pattern.
+         e. Optionally wraps whole selected groups back into the primary cell.
+         f. Saves the output coordinates to the output pattern.
 
     Parameters
     ----------
@@ -227,17 +230,31 @@ def unwrapper(
     if not is_valid:
         raise ValueError(f"Invalid XSC pattern: {error_msg}")
 
+    valid_grouping_unit = grouping_unit in {"residue", "chain", "segname"}
     first_frame_repair_enabled = bool(
         repair_first_frame
         and psf_pattern
         and target_selection
         and vmd
-        and grouping_unit in {"residue", "chain", "segname"}
+        and valid_grouping_unit
     )
-    if first_frame_repair_enabled:
+    group_wrap_enabled = bool(
+        wrap_groups_into_cell
+        and psf_pattern
+        and target_selection
+        and vmd
+        and valid_grouping_unit
+    )
+    if repair_first_frame and wrap_groups_into_cell:
+        raise ValueError("repair_first_frame and wrap_groups_into_cell are mutually exclusive.")
+    if repair_first_frame and not first_frame_repair_enabled:
+        raise ValueError("First-frame repair requires PSF pattern, target selection, VMD path, and a valid grouping unit.")
+    if wrap_groups_into_cell and not group_wrap_enabled:
+        raise ValueError("Group wrapping requires PSF pattern, target selection, VMD path, and a valid grouping unit.")
+    if first_frame_repair_enabled or group_wrap_enabled:
         is_valid, error_msg = validate_path_pattern(psf_pattern)
         if not is_valid:
-            raise ValueError(f"Invalid PSF pattern for first-frame repair: {error_msg}")
+            raise ValueError(f"Invalid PSF pattern for Step 2 group metadata: {error_msg}")
     
     print(f"{'='*50}")
     print(f"COORDINATE UNWRAPPING")
@@ -249,6 +266,7 @@ def unwrapper(
     print(f"Common term: {common_term}")
     print(f"Number of DCDs: {num_dcd}")
     print(f"Repair first frame by {grouping_unit}: {first_frame_repair_enabled}")
+    print(f"Wrap groups into cell by {grouping_unit}: {group_wrap_enabled}")
     
     # Determine indices to process
     if dcd_indices is None:
@@ -315,7 +333,8 @@ def unwrapper(
                 _unwrap_single_file(
                     i, baseDir, input_pattern, output_pattern, xsc_pattern,
                     box_size, chunk_size, common_term, input_io_spec, output_io_spec,
-                    psf_pattern, target_selection, vmd, grouping_unit, first_frame_repair_enabled
+                    psf_pattern, target_selection, vmd, grouping_unit, first_frame_repair_enabled,
+                    group_wrap_enabled, wrap_center
                 )
                 results['success'] += 1
                 print(f"✓ Completed file {i}")
@@ -331,7 +350,8 @@ def unwrapper(
                     _unwrap_single_file, 
                     i, baseDir, input_pattern, output_pattern, xsc_pattern,
                     box_size, chunk_size, common_term, input_io_spec, output_io_spec,
-                    psf_pattern, target_selection, vmd, grouping_unit, first_frame_repair_enabled
+                    psf_pattern, target_selection, vmd, grouping_unit, first_frame_repair_enabled,
+                    group_wrap_enabled, wrap_center
                 ): i 
                 for i in dcd_list
             }
@@ -407,7 +427,7 @@ def _resolve_first_frame_group_indices(file_index, baseDir, psf_pattern, target_
     psf_file_rel = expand_path_pattern(psf_pattern, common_term, file_index)
     psf_file = os.path.join(baseDir, psf_file_rel)
     if not os.path.exists(psf_file):
-        raise FileNotFoundError(f"PSF file for first-frame repair not found: {psf_file}")
+        raise FileNotFoundError(f"PSF file for Step 2 group metadata not found: {psf_file}")
     if os.path.getsize(psf_file) <= 0:
         raise ValueError(_format_unreadable_file_message("PSF", psf_file))
 
@@ -418,7 +438,7 @@ def _resolve_first_frame_group_indices(file_index, baseDir, psf_pattern, target_
     log_path = os.path.join("logs", f"unwrap_groups_{file_index}.log")
 
     with open(script_path, "w") as handle:
-        handle.write(f"""# Resolve selected atom groups for Step 2 first-frame repair
+        handle.write(f"""# Resolve selected atom groups for Step 2 group operations
 set PSF "{_tcl_quote(psf_file)}"
 set grouping_unit "{_tcl_quote(grouping_unit)}"
 
@@ -481,7 +501,7 @@ exit 0
         handle.write(f"STDERR:\n{process.stderr}\n")
 
     if process.returncode != 0:
-        raise RuntimeError(f"VMD failed while resolving Step 2 first-frame groups for index {file_index}. See {log_path}")
+        raise RuntimeError(f"VMD failed while resolving Step 2 groups for index {file_index}. See {log_path}")
 
     group_indices = None
     for line in process.stdout.splitlines():
@@ -496,7 +516,7 @@ exit 0
             break
 
     if not group_indices:
-        raise ValueError(f"No {grouping_unit} groups were resolved for Step 2 first-frame repair. See {log_path}")
+        raise ValueError(f"No {grouping_unit} groups were resolved for Step 2 group operations. See {log_path}")
 
     return group_indices
 
@@ -546,10 +566,39 @@ def _repair_first_frame_by_group(first_frame, box_size, group_indices):
     return repaired, repaired - first_frame
 
 
+def _validate_group_indices_match(group_indices, usable_atoms, file_index, operation_label):
+    grouped_positions = sorted(position for group in group_indices for position in group)
+    if grouped_positions != list(range(usable_atoms)):
+        raise ValueError(
+            f"Step 2 {operation_label} metadata does not match coordinate width for index {file_index}: "
+            f"VMD selection has {len(grouped_positions)} atoms, coordinate file has {usable_atoms} atoms. "
+            "Make sure Step 1 target selection and Step 2 input files match."
+        )
+
+
+def _wrap_groups_into_cell(unwrapped_coords, box_size, group_indices, center_mode="cell"):
+    """Wrap each already-unwrapped group as a whole body into the primary cell."""
+
+    wrapped = np.array(unwrapped_coords, copy=True)
+    center_by_selection = str(center_mode or "cell").strip().lower() == "extracted selection com"
+    box_center = box_size.reshape(1, 3) * 0.5
+
+    for frame_index in range(wrapped.shape[0]):
+        frame = wrapped[frame_index]
+        if center_by_selection:
+            frame += box_center - np.mean(frame, axis=0, keepdims=True)
+        for indices in group_indices:
+            group = frame[indices]
+            group_center = np.mean(group, axis=0)
+            group_shift = box_size * np.floor(group_center / box_size)
+            frame[indices] = group - group_shift
+    return wrapped
+
+
 def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_pattern,
                        box_size, chunk_size, common_term, input_io_spec=None, output_io_spec=None,
                        psf_pattern=None, target_selection=None, vmd=None, grouping_unit="residue",
-                       repair_first_frame=False):
+                       repair_first_frame=False, wrap_groups_into_cell=False, wrap_center="cell"):
     """Process a single coordinate file with vectorized unwrapping algorithm."""
     
     input_file_rel = expand_path_pattern(input_pattern, common_term, file_index)
@@ -581,17 +630,19 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
         # Reshape to (frames, atoms, 3)
         coords = coords.reshape(n_frames, usable_atoms, 3)
 
-        if repair_first_frame:
+        group_indices = None
+        if repair_first_frame or wrap_groups_into_cell:
             group_indices = _resolve_first_frame_group_indices(
                 file_index, baseDir, psf_pattern, target_selection, vmd, grouping_unit, common_term
             )
-            grouped_positions = sorted(position for group in group_indices for position in group)
-            if grouped_positions != list(range(usable_atoms)):
-                raise ValueError(
-                    f"Step 2 first-frame repair metadata does not match coordinate width for index {file_index}: "
-                    f"VMD selection has {len(grouped_positions)} atoms, coordinate file has {usable_atoms} atoms. "
-                    "Make sure Step 1 target selection and Step 2 input files match."
-                )
+            _validate_group_indices_match(
+                group_indices,
+                usable_atoms,
+                file_index,
+                "group operation",
+            )
+
+        if repair_first_frame:
             repaired_first_frame, atom_shifts = _repair_first_frame_by_group(coords[0], box_size, group_indices)
             shifted_atoms = int(np.count_nonzero(np.any(np.abs(atom_shifts) > 1e-6, axis=1)))
             coords += atom_shifts.reshape(1, usable_atoms, 3)
@@ -604,7 +655,7 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
         # Vectorized unwrapping algorithm - much more efficient than loops
         if n_frames == 1:
             # Single frame case - first-frame group repair may still have been applied.
-            unwrapped_flat = coords.reshape(n_frames, -1)
+            unwrapped = coords
         else:
             # Displacements between consecutive frames: shape (T-1, N, 3)
             disp = np.diff(coords, axis=0)
@@ -617,9 +668,13 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
             unwrapped = np.empty_like(coords)
             unwrapped[0] = coords[0]                               # reference frame
             unwrapped[1:] = coords[0] + np.cumsum(disp, axis=0)    # cumulative sum
-            
-            # Flatten back to (n_frames, n_cols)
-            unwrapped_flat = unwrapped.reshape(n_frames, -1)
+
+        if wrap_groups_into_cell:
+            unwrapped = _wrap_groups_into_cell(unwrapped, box_size, group_indices, wrap_center)
+            print(f"✓ Wrapped {len(group_indices)} {grouping_unit} group(s) into the cell")
+
+        # Flatten back to (n_frames, n_cols)
+        unwrapped_flat = unwrapped.reshape(n_frames, -1)
         _save_coordinate_array(output_file, unwrapped_flat, io_spec=output_io_spec)
         
         print(f"✓ Completed {input_file_rel} -> {output_file_rel}")

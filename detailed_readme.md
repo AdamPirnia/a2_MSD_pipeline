@@ -245,7 +245,63 @@ When enabled, the finite-size correction is applied after the raw diffusion esti
 
 The RDF workflow is described in [Extra Module: Radial Distribution Function](Manual.md#extra-module-radial-distribution-function), [RDF Fields](Manual.md#rdf-fields), and [RDF Output](Manual.md#rdf-output).
 
-For two selections \(A\) and \(B\), the software accumulates minimum-image pair distances between particles in `Selection 1` and particles in `Selection 2`. Empty selections mean all particles. With `Exclude Self-Pairs` enabled, pairs whose zero-based particle indices are identical are removed before histogramming.
+For two zero-based selections \(A\) and \(B\), the software accumulates minimum-image pair distances between particles in `Selection 1` and particles in `Selection 2`. Empty selections mean all particles. The selected particle counts are:
+
+$$
+{\Huge
+N_A=|A|,
+\quad
+N_B=|B|
+}
+$$
+
+For a frame \(t\), each selected pair distance is computed from:
+
+$$
+{\Huge
+\Delta \mathbf r_{ab}(t)=
+\mathbf r_a(t)-\mathbf r_b(t)
+-\mathbf L\,\mathrm{round}\!\left(
+\frac{\mathbf r_a(t)-\mathbf r_b(t)}{\mathbf L}
+\right),
+\quad
+d_{ab}(t)=|\Delta \mathbf r_{ab}(t)|
+}
+$$
+
+where \(a\in A\), \(b\in B\), and \(\mathbf L=(L_x,L_y,L_z)\). With `Exclude Self-Pairs` enabled, pairs with the same zero-based particle index are omitted:
+
+$$
+{\Huge
+\mathcal P =
+\left\{(a,b): a\in A,\ b\in B,\ a\ne b\right\}
+}
+$$
+
+Without `Exclude Self-Pairs`, the pair set is simply \(A\times B\). For bin edges \(r_i=i\Delta r\), the reported radius is the bin center:
+
+$$
+{\Huge
+r_i^{\mathrm{center}}=
+\frac{r_i+r_{i+1}}{2}
+}
+$$
+
+The raw histogram count for bin \(i\) is:
+
+$$
+{\Huge
+H_i=
+\sum_{m}
+\sum_{t\in m}
+\sum_{(a,b)\in\mathcal P}
+\mathbf 1\!\left[
+r_i \le d_{ab}(t) < r_{i+1}
+\right]
+}
+$$
+
+where \(m\) runs over the selected coordinate files. This is why split trajectory pieces are accumulated into one total RDF instead of being normalized separately.
 
 The shell volume for a radial bin \([r_i,r_{i+1})\) is:
 
@@ -256,28 +312,53 @@ $$
 }
 $$
 
-The RDF reported by the generated workflow is normalized as:
+`Density-Normalize` controls whether the Selection 2 number density is included in the denominator:
 
 $$
 {\Huge
-g(r_i)=
-\frac{H_i}
-{N_{\mathrm{frames}}\,N_A\,\rho_B\,\Delta V_i}
+f_{\rho}=
+\begin{cases}
+\rho_B, & \text{Density-Normalize checked}\\
+1, & \text{Density-Normalize unchecked}
+\end{cases}
 }
 $$
 
-where \(H_i\) is the raw pair-count histogram for bin \(i\), \(N_A\) is the size of `Selection 1`, and \(\rho_B=N_B/V\) is the number density of `Selection 2` in the orthorhombic cell volume \(V=L_xL_yL_z\). Multiple coordinate files are accumulated into the same histogram before this normalization, so split trajectory pieces can produce one total RDF.
+The radial profile reported in column 2 is then:
+
+$$
+{\Huge
+y(r_i^{\mathrm{center}})=
+\frac{H_i}
+{N_{\mathrm{frames}}\,N_A\,f_{\rho}\,\Delta V_i}
+}
+$$
+
+where:
+
+$$
+{\Huge
+N_{\mathrm{frames}}=
+\sum_m F_m,
+\quad
+V=L_xL_yL_z,
+\quad
+\rho_B=\frac{N_B}{V}
+}
+$$
+
+Here \(F_m\) is the number of retained frames from coordinate file \(m\) after trajectory selection, stride, and optional desired-length filtering. When `Density-Normalize` is checked, \(y(r)=g(r)\), the usual dimensionless RDF. When it is unchecked, \(y(r)\) is a shell-volume-normalized radial number-density profile around Selection 1, with units of inverse volume.
 
 The running coordination number is:
 
 $$
 {\Huge
-N(r_n)=
-\sum_{i=0}^{n} g(r_i)\,\rho_B\,\Delta V_i
+N(r_n^{\mathrm{center}})=
+\sum_{i=0}^{n} y(r_i^{\mathrm{center}})\,f_{\rho}\,\Delta V_i
 }
 $$
 
-The output also includes `hist`, the raw pair-count histogram before RDF normalization.
+The output also includes `hist`, which is \(H_i\), the raw pair-count histogram before RDF normalization. `Chunkify`, `Chunk Size 1`, and `Chunk Size 2` only split the pair-distance work into smaller blocks for memory control; they do not change these equations.
 
 ## Density Structure Factors
 

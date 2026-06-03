@@ -225,6 +225,14 @@ def _prepare_com_metadata(metadata, calc_mode):
     if np.any(group_masses <= 0.0):
         raise ValueError("At least one inferred COM group has non-positive total mass")
 
+    active_atom_indices = np.flatnonzero(atom_mask).astype(np.intp, copy=False)
+    sort_order = np.argsort(effective_group_indices, kind="stable")
+    sorted_group_indices = effective_group_indices[sort_order]
+    present_group_indices, group_start_indices = np.unique(sorted_group_indices, return_index=True)
+    expected_group_indices = np.arange(len(group_labels), dtype=present_group_indices.dtype)
+    if present_group_indices.shape != expected_group_indices.shape or not np.array_equal(present_group_indices, expected_group_indices):
+        raise ValueError("COM group metadata is not contiguous after zero-mass atoms are removed")
+
     return {
         "atom_count": int(metadata["atom_count"]),
         "atom_mask": atom_mask,
@@ -232,6 +240,9 @@ def _prepare_com_metadata(metadata, calc_mode):
         "group_indices": effective_group_indices,
         "group_labels": group_labels,
         "group_masses": group_masses,
+        "sorted_atom_indices": active_atom_indices[sort_order],
+        "sorted_effective_masses": effective_masses[sort_order],
+        "group_start_indices": group_start_indices.astype(np.intp, copy=False),
     }
 
 
@@ -421,6 +432,7 @@ def coms(baseDir, input_pattern, output_pattern, num_dcd, psf_pattern=None, targ
     print(f"Resolved {len(com_metadata['group_labels'])} COM group(s)")
     if ignored_atoms:
         print(f"Ignoring {ignored_atoms} zero-mass atom(s) from the selected atoms during COM calculation")
+    chunk_size = _apply_runtime_com_chunk_cap(chunk_size, com_metadata, int(max_workers))
 
     results = {
         'success': 0,
@@ -558,6 +570,51 @@ def _normalize_chunk_size(chunk_size, n_frames):
     return min(value, n_frames)
 
 
+def _recommended_runtime_com_chunk_cap(com_metadata, max_workers):
+    if max_workers <= 1:
+        return None
+    active_atoms = int(len(com_metadata["sorted_atom_indices"]))
+    num_groups = int(len(com_metadata["group_masses"]))
+    if active_atoms <= 0 or num_groups <= 0:
+        return None
+
+    chunk_workspace_per_frame_mb = (
+        active_atoms * 8
+        + num_groups * 8
+        + num_groups * 3 * 8
+    ) / (1024**2)
+    if chunk_workspace_per_frame_mb <= 0:
+        return None
+
+    if max_workers >= 16:
+        target_chunk_workspace_mb = 512.0
+    elif max_workers >= 8:
+        target_chunk_workspace_mb = 768.0
+    else:
+        target_chunk_workspace_mb = 1024.0
+    return max(1, int(target_chunk_workspace_mb / chunk_workspace_per_frame_mb))
+
+
+def _apply_runtime_com_chunk_cap(chunk_size, com_metadata, max_workers):
+    cap = _recommended_runtime_com_chunk_cap(com_metadata, max_workers)
+    if cap is None:
+        return chunk_size
+    if chunk_size is None or str(chunk_size).strip().lower() in {"", "auto"}:
+        print(f"Auto Step 3 chunk size capped at {cap} frames for {max_workers} parallel COM workers")
+        return cap
+    try:
+        requested = int(chunk_size)
+    except (TypeError, ValueError):
+        return chunk_size
+    if requested > cap:
+        print(
+            f"Reducing Step 3 chunk size from {requested} to {cap} frames "
+            f"for {max_workers} parallel COM workers"
+        )
+        return cap
+    return chunk_size
+
+
 def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern, com_metadata, use_memmap, chunk_size=None, common_term="", input_io_spec=None, output_io_spec=None):
     """Compute center-of-mass for a single trajectory file with optimized memory usage."""
     
@@ -600,10 +657,7 @@ def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern,
             end_idx = min(start_idx + effective_chunk_size, n_frames)
             centers_chunk = _compute_com_vectorized(
                 atom_coords[start_idx:end_idx],
-                com_metadata["atom_mask"],
-                com_metadata["effective_masses"],
-                com_metadata["group_indices"],
-                com_metadata["group_masses"],
+                com_metadata,
             )
             centers_of_mass_flat[start_idx:end_idx] = centers_chunk.reshape(end_idx - start_idx, -1)
         
@@ -623,7 +677,7 @@ def _compute_com_single_file(file_index, baseDir, input_pattern, output_pattern,
         raise RuntimeError(f"Error processing file {input_file}: {e}")
 
 
-def _compute_com_vectorized(data, atom_mask, effective_masses, group_indices, group_masses):
+def _compute_com_vectorized(data, com_metadata):
     """
     Compute center-of-mass using highly optimized vectorized operations.
     
@@ -637,17 +691,20 @@ def _compute_com_vectorized(data, atom_mask, effective_masses, group_indices, gr
     com : ndarray, shape (n_frames, n_groups, 3)
         Center-of-mass coordinates.
     """
-    coords = data[:, atom_mask, :]
-    masses_broadcast = effective_masses.reshape(1, -1, 1)
-    weighted_coords = coords * masses_broadcast
+    sorted_atom_indices = com_metadata["sorted_atom_indices"]
+    sorted_masses = com_metadata["sorted_effective_masses"]
+    group_start_indices = com_metadata["group_start_indices"]
+    group_masses = com_metadata["group_masses"]
     num_groups = int(len(group_masses))
-    centers = np.zeros((coords.shape[0], num_groups, 3), dtype=np.float64)
+    centers = np.empty((data.shape[0], num_groups, 3), dtype=np.float64)
+    mass_row = sorted_masses.reshape(1, -1)
+    group_mass_row = group_masses.reshape(1, -1)
 
-    for group_index in range(num_groups):
-        group_mask = group_indices == group_index
-        if not np.any(group_mask):
-            raise ValueError(f"COM group {group_index} does not contain any atoms")
-        centers[:, group_index, :] = np.sum(weighted_coords[:, group_mask, :], axis=1) / float(group_masses[group_index])
+    for dim in range(3):
+        weighted_component = np.asarray(data[:, sorted_atom_indices, dim], dtype=np.float64)
+        weighted_component *= mass_row
+        group_sums = np.add.reduceat(weighted_component, group_start_indices, axis=1)
+        centers[:, :, dim] = group_sums / group_mass_row
 
     return centers
 

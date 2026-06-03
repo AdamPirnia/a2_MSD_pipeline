@@ -232,6 +232,7 @@ def compute_radial_distribution_function_from_files(
     max_workers: int = 1,
     selection1_block_size: int | None = 1,
     selection2_block_size: int | None = 1,
+    density_normalize: bool = True,
     input_io_spec: dict[str, Any] | None = None,
     output_io_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -332,16 +333,18 @@ def compute_radial_distribution_function_from_files(
     n_selection1 = n_selection1_values.pop()
     n_selection2 = n_selection2_values.pop()
     rho2 = float(n_selection2) / volume
-    normalization = float(total_frames) * float(n_selection1) * rho2 * shell_volumes
+    density_factor = rho2 if bool(density_normalize) else 1.0
+    normalization = float(total_frames) * float(n_selection1) * density_factor * shell_volumes
     g_r = np.divide(hist, normalization, out=np.zeros_like(hist, dtype=np.float64), where=normalization != 0.0)
-    coordination_number = np.cumsum(g_r * shell_volumes * rho2)
+    coordination_number = np.cumsum(g_r * shell_volumes * density_factor)
 
     output_file = os.path.join(baseDir, expand_path_pattern(output_path, common_term, None))
     output_data = np.column_stack((r, g_r, coordination_number, hist))
+    column2_label = "g(r)" if bool(density_normalize) else "radial_number_density"
     header = "\n".join(
         [
             "Radial Distribution Function",
-            "columns: r g(r) coordination_number hist",
+            f"columns: r {column2_label} coordination_number hist",
             f"input_pattern: {input_pattern}",
             f"num_trajectories: {num_trajectories}",
             f"trajectory_indices: {trajectory_indices}",
@@ -352,10 +355,12 @@ def compute_radial_distribution_function_from_files(
             f"exclude_self_pairs: {bool(exclude_self_pairs)}",
             f"selection1_block_size: {selection1_block_size if selection1_block_size is not None else 1}",
             f"selection2_block_size: {selection2_block_size if selection2_block_size is not None else 1}",
+            f"density_normalize: {bool(density_normalize)}",
             f"dr: {dr}",
             f"r_max: {resolved_r_max}",
             f"rho_selection2: {rho2:.15g}",
             "hist is the raw pair-count histogram before RDF normalization.",
+            "When density_normalize is False, column 2 is shell-volume-normalized radial number density around Selection 1.",
         ]
     )
     save_numeric_array(
@@ -375,6 +380,8 @@ def compute_radial_distribution_function_from_files(
         "n_selection1": n_selection1,
         "n_selection2": n_selection2,
         "rho_selection2": rho2,
+        "density_normalize": bool(density_normalize),
+        "column2_label": column2_label,
         "r_max": resolved_r_max,
         "dr": dr,
         "hist_sum": float(np.sum(hist)),

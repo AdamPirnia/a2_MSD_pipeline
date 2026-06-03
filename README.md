@@ -269,6 +269,7 @@ Current behavior highlights:
 - `Selection 1` and `Selection 2` use zero-based particle indices
 - empty selections mean all particles in the input coordinate files
 - `Exclude Self-Pairs` can remove self distances when selections overlap
+- `Density-Normalize` can be unchecked to report a local radial number-density profile instead of a bulk-density-normalized RDF
 - multiple coordinate files can be accumulated into one total RDF
 - `Chunkify` exposes `Chunk Size 1` and `Chunk Size 2` for pair-distance chunking
 - Smart Optimization can recommend workers, chunk sizes, and SLURM resources
@@ -276,7 +277,7 @@ Current behavior highlights:
 Typical outputs:
 
 - radial bin center `r`
-- radial distribution function `g(r)`
+- radial distribution function `g(r)`, or radial number density when `Density-Normalize` is unchecked
 - running coordination number
 - raw pair-count histogram `hist`
 
