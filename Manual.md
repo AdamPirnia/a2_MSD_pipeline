@@ -1355,7 +1355,7 @@ The `Radial Distribution Function` module generates scripts for computing `g(r)`
 
 - `Base Directory`: root folder for RDF inputs and relative outputs
 - `Number of Coordinate Files`: number of indexed coordinate files; indices are zero-based, from `0` to `N - 1`
-- `Common Terms`: two optional replacement fields for `*` and `**`
+- `Common Terms`: two optional replacement fields for `*` and `**`. In RDF numeric fields, such as `Bin Width`, placeholders are expanded first and then converted to numbers, so `Bin Width = **` can use numeric Common Term 2 values such as `1, 2`.
 - `Max Workers`: maximum coordinate files to process at the same time
 - `Smart Optimization`: estimates RDF pair workload and memory from frames, particle count, selections, available memory, and CPU workers; it applies recommended `Max Workers`, `Chunk Size 1`, `Chunk Size 2`, and SLURM CPU/memory/walltime fields
 
@@ -1366,7 +1366,7 @@ The `Radial Distribution Function` module generates scripts for computing `g(r)`
 - `Output Path`: main RDF output file
 - `Cell Dimensions`: one cubic length or three dimensions `Lx Ly Lz`; used for orthorhombic minimum-image distances
 - `r Max`: optional maximum RDF distance. If empty, the calculation uses half of the smallest cell dimension.
-- `Bin Width`: RDF radial bin width
+- `Bin Width`: RDF radial bin width. It may use a numeric common-term placeholder, for example `**` with Common Term 2 values `1, 2`.
 - `Density-Normalize`: includes Selection 2 density in the RDF denominator. If unchecked, column 2 is a shell-volume-normalized radial number-density profile around Selection 1 instead of a bulk-density-normalized RDF.
 - `Chunkify`: enables the chunk-size fields. If unchecked, both chunk sizes are treated as `1`.
 - `Chunk Size 1`: number of Selection 1 particles processed at once during pair-distance calculation
