@@ -389,6 +389,12 @@ You can enable either one or both, depending on the scripts you want to generate
 - `Common Terms`: two optional shared replacement fields for `*` and `**` in patterns
 - `Max Workers`: maximum CPU workers to use
 
+## Smart Optimization
+
+The Velocities and Dipoles module has its own optimizer. Use the `Optimize` dropdown to choose `Velocity Extraction` or `Dipole Calculations`; when opened, it defaults to the tab you are currently viewing.
+
+For dipoles, the estimate follows the current `Calculation Method`: individual dipoles estimate NumPy coordinate/COM array memory, while collective dipoles estimate VMD trajectory and optional wrapping memory.
+
 ## Velocity Extraction tab
 
 This workflow generates scripts for extracting center-of-mass velocities from velocity trajectories using VMD.
@@ -896,8 +902,11 @@ This module generates scripts for density structure factors and charge-dipole st
 - `Base Directory`: root folder used to resolve relative input and output paths
 - `Common Terms`: optional `*` and `**` replacements, exactly like the other modules
 - `Number of Trajectories`: optional limit on how many discovered trajectory files or file sets are used; leave blank to use all discovered inputs
-- `Max Workers`: maximum worker processes used when the density structure-factor calculations average over multiple trajectory files
+- `Max Workers`: maximum worker processes used when structure-factor calculations process multiple trajectory files or charge-dipole file sets
 - `Resume`: when `Use existing per-trajectory outputs` is checked, trajectories whose per-trajectory report files already exist and match the current `k` grid are reused; use this only when rerunning the same inputs/settings after an interrupted job; missing trajectories are computed, and the final total includes both reused and newly computed reports
+- `Smart Optimization`: opens a helper for estimating worker count, chunk sizes, SLURM memory, CPUs, and walltime. It has separate profiles for `S(k)` isotropic, `S(k)` directional, `S(k)` along-k components, and charge-dipole `Sqp(k)`.
+
+The Smart Optimization helper uses the current stride, trajectory-selection, desired-length, cutoff, and k-grid settings. It asks for the values that cannot be reliably inferred from paths alone, such as frames per file, coordinates per frame, charge sites per frame, dipoles per frame, available memory, and CPU workers. For density `S(k)`, it recommends `Frame`, `Coordinate`, and `k` chunk sizes. For charge-dipole `Sqp(k)`, it recommends `Frame`, `Charge`, `Dipole`, and `k` chunk sizes and enables those chunk controls.
 
 ## Density Structure Factor Tab
 
@@ -1075,6 +1084,8 @@ The charge-values file is normally a constant-charge table. If the file has more
 
 Charge sites with charge exactly `0.0` are ignored before the charge-dipole calculation starts. This means they do not contribute to `Sqp(k)`, and they also do not define cutoff neighborhoods. With a cutoff enabled, only dipoles within the cutoff distance of nonzero charge sites are included.
 
+For generated file-based workflows, the charge-dipole sums below are evaluated frame by frame and divided by the number of contributing dipoles in that frame before the frame contribution is added to the accumulated output. With no cutoff, this denominator is the number of valid dipoles after optional dipole-magnitude masking. With a cutoff, it is the number of unique valid dipoles inside the cutoff neighborhood of the nonzero charge sites for that frame and `k` tier.
+
 ### Charge-Dipole Fields
 
 - `Calculation Mode`: either `Directional` or `Isotropic`
@@ -1085,6 +1096,8 @@ Charge sites with charge exactly `0.0` are ignored before the charge-dipole calc
 - `Dipole Positions Path`: coordinate pattern for dipole positions
 - `Dipole Positions Stride`: frame stride for dipole-position input
 - `Dipole Vectors Path`: vector pattern for dipole directions; the GUI keeps its stride matched to the dipole-position stride
+- `Discard Dipoles With Magnitudes >`: optional threshold for masking unrealistic dipoles; if set, only dipoles with magnitude greater than the threshold are removed from that frame
+- `Dipole Magnitudes Path`: optional magnitude-file pattern used to find dipoles above the threshold; if omitted while the threshold is set, magnitudes are computed from the dipole-vector input
 - `Isotropic Output Path`: isotropic charge-dipole output file
 - `Directional Output Path`: directional charge-dipole output file; required only in directional mode
 - `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`
@@ -1149,7 +1162,7 @@ Directional output format:
 - column 5: real part of the charge-dipole structure factor
 - column 6: imaginary part of the charge-dipole structure factor
 
-The directional values are raw accumulated values; they are not divided by the number of frames, trajectories, or dipoles.
+The directional `Sqp(k)` values are normalized during the calculation by the number of contributing dipoles in each processed frame, then accumulated across frames and trajectory files. They are not divided by the number of frames or trajectory files.
 
 Isotropic output format produced from the directional data:
 
@@ -1189,7 +1202,7 @@ $$
 Output format:
 
 - column 1: `|k|`
-- column 2: raw accumulated charge-dipole structure factor, `Sqp(k)`; it is not divided by the number of frames, trajectories, or dipoles
+- column 2: charge-dipole structure factor, `Sqp(k)`, normalized during the calculation by the number of contributing dipoles in each processed frame; it is not divided by the number of frames or trajectory files
 - column 3: average number of dipoles included by `CO-1`
 - column 4: average number of dipoles included by `CO-2`
 - column 5: average number of dipoles included by `CO-3`
@@ -1312,18 +1325,18 @@ Rows:
 Columns:
 
 - column 1: `|k|`
-- column 2: raw accumulated `Sqp(k)`
+- column 2: dipole-normalized accumulated `Sqp(k)`
 - column 3: average number of dipoles included by `CO-1`
 - column 4: average number of dipoles included by `CO-2`
 - column 5: average number of dipoles included by `CO-3`
 
-The `Sqp(k)` value is raw accumulated output: it is not divided by the number of frames, trajectory files, or dipoles.
+The `Sqp(k)` value is normalized during the calculation by the number of contributing dipoles in each processed frame, then accumulated across frames and trajectory files. It is not divided by the number of frames or trajectory files.
 
 With resume enabled, direct isotropic charge-dipole per-trajectory reports are reused only if their `|k|` column matches the current settings. The matching dipole-count file is also required so the final `CO-1`, `CO-2`, and `CO-3` average-count columns can include reused trajectories.
 
 ### Charge-Dipole Dipole-Count Outputs
 
-When charge-dipole calculations run, the workflow writes one `dipole_counts/dipole_count_<trajectory>.dat` file per processed trajectory. These files begin with `#` header lines describing the trajectory index and cutoff values.
+When charge-dipole calculations run, the workflow writes one `dipole_counts/dipole_count_<trajectory>.dat` file per processed trajectory. These files begin with `#` header lines describing the trajectory index and cutoff values. The column-header line also starts with `#`, so NumPy text loaders skip it by default.
 
 Rows:
 

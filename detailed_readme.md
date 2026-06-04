@@ -430,6 +430,8 @@ $$
 
 Only nonzero charge sites contribute. With real-space cutoffs, only dipoles within the cutoff distance of those nonzero charge sites are included.
 
+In the generated file-based workflows, each processed frame contributes the corresponding expression below divided by \(N_m(f)\), the number of contributing dipoles in that frame. Without a cutoff, \(N_m(f)\) is the number of valid dipoles after optional dipole-magnitude masking. With a cutoff, \(N_m(f)\) is the number of unique valid dipoles inside the cutoff neighborhood of the nonzero charge sites for that frame and k tier. The dipole-normalized frame contributions are then accumulated across processed frames and trajectory files.
+
 For isotropic mode with `Small k approx` unchecked:
 
 $$
@@ -484,7 +486,7 @@ $$
 
 The directional small-`k` approximation is real-valued. The output keeps the directional real/imaginary column layout described in [Charge-Dipole Directional Mode](Manual.md#charge-dipole-directional-mode), with the imaginary column equal to zero in small-`k` mode.
 
-The file-based charge-dipole workflows report raw accumulated `Sqp(k)` values. They are not normalized by the number of frames, trajectories, or dipoles, matching the mode descriptions in [Charge-Dipole Isotropic Mode](Manual.md#charge-dipole-isotropic-mode) and [Charge-Dipole Directional Mode](Manual.md#charge-dipole-directional-mode).
+The file-based charge-dipole workflows normalize each processed frame by the number of contributing dipoles for that frame, then accumulate the resulting `Sqp(k)` values across frames and trajectory files. They are not divided by the number of frames or trajectory files, matching the mode descriptions in [Charge-Dipole Isotropic Mode](Manual.md#charge-dipole-isotropic-mode) and [Charge-Dipole Directional Mode](Manual.md#charge-dipole-directional-mode).
 
 ## Output and Workflow Notes
 
