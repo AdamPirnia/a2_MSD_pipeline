@@ -245,7 +245,7 @@ When enabled, the finite-size correction is applied after the raw diffusion esti
 
 The RDF workflow is described in [Extra Module: Radial Distribution Function](Manual.md#extra-module-radial-distribution-function), [RDF Fields](Manual.md#rdf-fields), and [RDF Output](Manual.md#rdf-output).
 
-For two zero-based selections \(A\) and \(B\), the software accumulates minimum-image pair distances between particles in `Selection 1` and particles in `Selection 2`. Empty selections mean all particles. The selected particle counts are:
+For two zero-based selections $A$ and $B$, the software accumulates minimum-image pair distances between particles in `Selection 1` and particles in `Selection 2`. Empty selections mean all particles. The selected particle counts are:
 
 $$
 {\Huge
@@ -255,7 +255,7 @@ N_B=|B|
 }
 $$
 
-For a frame \(t\), each selected pair distance is computed from:
+For a frame $t$, each selected pair distance is computed from:
 
 $$
 {\Huge
@@ -269,16 +269,16 @@ d_{ab}(t)=|\Delta \mathbf r_{ab}(t)|
 }
 $$
 
-where \(a\in A\), \(b\in B\), and \(\mathbf L=(L_x,L_y,L_z)\). With `Exclude Self-Pairs` enabled, pairs with the same zero-based particle index are omitted:
+where $a\in A$, $b\in B$, and $\mathbf L=(L_x,L_y,L_z)$. With `Exclude Self-Pairs` enabled, pairs with the same zero-based particle index are omitted:
 
 $$
 {\Huge
 \mathcal P =
-\left\{(a,b): a\in A,\ b\in B,\ a\ne b\right\}
+\{(a,b)\mid a\in A,\ b\in B,\ a\ne b\}
 }
 $$
 
-Without `Exclude Self-Pairs`, the pair set is simply \(A\times B\). For bin edges \(r_i=i\Delta r\), the reported radius is the bin center:
+Without `Exclude Self-Pairs`, the pair set is simply $A\times B$. For bin edges $r_i=i\Delta r$, the reported radius is the bin center:
 
 $$
 {\Huge
@@ -287,7 +287,7 @@ r_i^{\mathrm{center}}=
 }
 $$
 
-The raw histogram count for bin \(i\) is:
+The raw histogram count for bin $i$ is:
 
 $$
 {\Huge
@@ -301,9 +301,9 @@ r_i \le d_{ab}(t) < r_{i+1}
 }
 $$
 
-where \(m\) runs over the selected coordinate files. This is why split trajectory pieces are accumulated into one total RDF instead of being normalized separately.
+where $m$ runs over the selected coordinate files. This is why split trajectory pieces are accumulated into one total RDF instead of being normalized separately.
 
-The shell volume for a radial bin \([r_i,r_{i+1})\) is:
+The shell volume for a radial bin from $r_i$ to $r_{i+1}$ is:
 
 $$
 {\Huge
@@ -311,6 +311,17 @@ $$
 \frac{4\pi}{3}\left(r_{i+1}^3-r_i^3\right)
 }
 $$
+
+In the code, this shell volume is calculated from the bin edges, not from the displayed bin-center radius alone. The first output column is:
+
+$$
+{\Huge
+r_i^{\mathrm{center}} =
+\frac{r_i+r_{i+1}}{2}
+}
+$$
+
+and the shell volume is still $\Delta V_i=(4\pi/3)(r_{i+1}^3-r_i^3)$ whether `Density-Normalize` is checked or unchecked.
 
 `Density-Normalize` controls whether the Selection 2 number density is included in the denominator:
 
@@ -347,7 +358,7 @@ V=L_xL_yL_z,
 }
 $$
 
-Here \(F_m\) is the number of retained frames from coordinate file \(m\) after trajectory selection, stride, and optional desired-length filtering. When `Density-Normalize` is checked, \(y(r)=g(r)\), the usual dimensionless RDF. When it is unchecked, \(y(r)\) is a shell-volume-normalized radial number-density profile around Selection 1, with units of inverse volume.
+Here $F_m$ is the number of retained frames from coordinate file $m$ after trajectory selection, stride, and optional desired-length filtering. When `Density-Normalize` is checked, $y(r)=g(r)$, the usual dimensionless RDF. When it is unchecked, $y(r)$ is a shell-volume-normalized radial number-density profile around Selection 1, with units of inverse volume.
 
 The running coordination number is:
 
@@ -358,7 +369,7 @@ N(r_n^{\mathrm{center}})=
 }
 $$
 
-The output also includes `hist`, which is \(H_i\), the raw pair-count histogram before RDF normalization. `Chunkify`, `Chunk Size 1`, and `Chunk Size 2` only split the pair-distance work into smaller blocks for memory control; they do not change these equations.
+The output also includes `hist`, which is $H_i$, the raw pair-count histogram before RDF normalization. `Chunkify`, `Chunk Size 1`, and `Chunk Size 2` only split the pair-distance work into smaller blocks for memory control; they do not change these equations.
 
 ## Density Structure Factors
 
