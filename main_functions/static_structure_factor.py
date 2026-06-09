@@ -869,6 +869,31 @@ class _StatusLogger:
         )
         self.last_emit_epoch = now
 
+    def charge_charge(
+        self,
+        num_frames: int,
+        charges1_count: int,
+        charges2_count: int,
+        k_count: int,
+        *,
+        force: bool = False,
+    ) -> None:
+        if not self.enabled:
+            return
+        now = time.time()
+        if not force and now - self.last_emit_epoch < self.interval_s:
+            return
+        elapsed = _format_elapsed_hms(now - self.start_epoch)
+        self._write(
+            f"{self._prefix()}Sq(k): "
+            f"Time: {elapsed}, "
+            f"Num. Frame: {int(num_frames)}, "
+            f"Num. charge 1: {int(charges1_count)}, "
+            f"Num. charge 2: {int(charges2_count)}, "
+            f"Num. k vec.: {int(k_count)}\n"
+        )
+        self.last_emit_epoch = now
+
 
 def _array_to_single_line(values: np.ndarray) -> str:
     array = np.asarray(values)
@@ -1244,6 +1269,142 @@ def _apply_frame_stride(coords: np.ndarray, stride: int, *, label: str) -> np.nd
     if int(sliced.shape[0]) <= 0:
         raise ValueError(f"{label} stride produced an empty frame selection.")
     return sliced
+
+
+def _slice_int_value(node: ast.AST) -> int | None:
+    if isinstance(node, ast.Constant):
+        if node.value is None:
+            return None
+        if isinstance(node.value, int) and not isinstance(node.value, bool):
+            return int(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        value = _slice_int_value(node.operand)
+        if value is None:
+            raise ValueError("Negative coordinate-slice values must be integers.")
+        return -value
+    raise ValueError("Coordinate slicing accepts only integers, blanks, ':', and ','.")
+
+
+def _parse_slice_node(node: ast.AST) -> Any:
+    if isinstance(node, ast.Slice):
+        return slice(
+            _slice_int_value(node.lower) if node.lower is not None else None,
+            _slice_int_value(node.upper) if node.upper is not None else None,
+            _slice_int_value(node.step) if node.step is not None else None,
+        )
+    if isinstance(node, ast.Tuple):
+        return tuple(_parse_slice_node(item) for item in node.elts)
+    if isinstance(node, ast.Constant) and node.value is Ellipsis:
+        return Ellipsis
+    value = _slice_int_value(node)
+    if value is None:
+        raise ValueError("Coordinate slicing cannot use None as an index.")
+    return value
+
+
+def _split_bracketed_axis_slices(text: str) -> list[str] | None:
+    parts: list[str] = []
+    index = 0
+    while index < len(text):
+        while index < len(text) and text[index] in " \t,":
+            index += 1
+        if index >= len(text):
+            break
+        if text[index] != "[":
+            return None
+        start = index + 1
+        depth = 1
+        index += 1
+        while index < len(text) and depth:
+            char = text[index]
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+            index += 1
+        if depth != 0:
+            return None
+        part = text[start : index - 1].strip()
+        if not part:
+            return None
+        parts.append(part)
+        while index < len(text) and text[index] in " \t":
+            index += 1
+        if index < len(text):
+            if text[index] != ",":
+                return None
+            index += 1
+    return parts if parts else None
+
+
+def _normalize_coordinate_slice_text(text: str) -> str:
+    candidates = [text]
+    if text.startswith("[[") and text.endswith("]]"):
+        candidates.insert(0, text[1:-1].strip())
+    for candidate in candidates:
+        parts = _split_bracketed_axis_slices(candidate)
+        if parts and len(parts) > 1:
+            return "[" + ", ".join(parts) + "]"
+    return text
+
+
+def _parse_coordinate_slice(value: Any, *, label: str) -> Any:
+    text = _normalize_coordinate_slice_text(str(value or "").strip())
+    if not text:
+        return (slice(None), slice(None), slice(None))
+    expression = f"_coords{text}" if text.startswith("[") else f"_coords[{text}]"
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"{label} is not valid Python slicing syntax: {text!r}") from exc
+    if not isinstance(tree.body, ast.Subscript):
+        raise ValueError(f"{label} must be a Python slicing expression such as [::10].")
+    parsed = _parse_slice_node(tree.body.slice)
+    if parsed is Ellipsis:
+        return parsed
+    if not isinstance(parsed, tuple):
+        parsed = (parsed,)
+    if len(parsed) > 3:
+        raise ValueError(f"{label} can slice at most frame, particle, and coordinate axes.")
+    return parsed + (slice(None),) * (3 - len(parsed))
+
+
+def _apply_coordinate_slice_with_particles(
+    coords: np.ndarray,
+    charge_values: np.ndarray,
+    slice_value: Any,
+    *,
+    label: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    index = _parse_coordinate_slice(slice_value, label=label)
+    try:
+        sliced_coords = coords[index]
+    except Exception as exc:
+        raise ValueError(f"{label} failed for coordinate shape {coords.shape}: {slice_value!r}") from exc
+    if sliced_coords.ndim != 3 or sliced_coords.shape[2] != 3:
+        raise ValueError(
+            f"{label} must preserve coordinate shape (frames, particles, 3). "
+            "Use ranges such as [:, 67:68] instead of integer particle indexing."
+        )
+    if sliced_coords.shape[0] == 0:
+        raise ValueError(f"{label} leaves zero frames.")
+    if sliced_coords.shape[1] == 0:
+        raise ValueError(f"{label} leaves zero particles.")
+
+    particle_index = slice(None) if index is Ellipsis else index[1]
+    try:
+        particle_indices = np.arange(int(coords.shape[1]), dtype=np.int64)[particle_index]
+    except Exception as exc:
+        raise ValueError(f"{label} particle slice failed for {coords.shape[1]} particles.") from exc
+    particle_indices = np.asarray(particle_indices, dtype=np.int64).reshape(-1)
+    sliced_charges = np.asarray(charge_values, dtype=np.float64)[particle_indices]
+    if int(sliced_charges.size) != int(sliced_coords.shape[1]):
+        raise ValueError(f"{label} charge slicing did not match the sliced coordinate count.")
+    return (
+        np.ascontiguousarray(sliced_coords, dtype=np.float64),
+        np.ascontiguousarray(sliced_charges, dtype=np.float64),
+        particle_indices,
+    )
 
 
 def _optional_float_value(value: Any) -> float | None:
@@ -1939,6 +2100,141 @@ def _filter_by_resolution(values: np.ndarray, resolution: float, *, dtype: Any =
     return np.asarray(selected, dtype=dtype)
 
 
+def _is_cubic_cell(cell: tuple[float, float, float], *, rtol: float = 1.0e-12, atol: float = 1.0e-12) -> bool:
+    return bool(
+        np.isclose(cell[0], cell[1], rtol=rtol, atol=atol)
+        and np.isclose(cell[0], cell[2], rtol=rtol, atol=atol)
+    )
+
+
+def _cubic_k_count_for_tier(
+    cell_length: float,
+    lower: float,
+    upper: float,
+    resolution: float,
+) -> tuple[int, int]:
+    if upper <= lower:
+        return 0, 0
+    two_pi = float(2.0 * np.pi)
+    nmax = int(np.ceil(float(upper) * float(cell_length) / two_pi))
+    if nmax <= 0:
+        return 0, 0
+
+    z_values = np.arange(0, nmax + 1, dtype=np.int64)
+    z_sq = z_values * z_values
+    z_mult = np.where(z_values > 0, 2, 1).astype(np.int64)
+    counts = np.zeros(3 * nmax * nmax + 1, dtype=np.int64)
+    for nx in range(0, nmax + 1):
+        nx_sq = nx * nx
+        nx_mult = 2 if nx > 0 else 1
+        for ny in range(0, nmax + 1):
+            base = nx_sq + ny * ny
+            if base == 0:
+                indices = z_sq[1:]
+                multiplicities = z_mult[1:] * nx_mult
+            else:
+                indices = base + z_sq
+                ny_mult = 2 if ny > 0 else 1
+                multiplicities = z_mult * nx_mult * ny_mult
+            np.add.at(counts, indices, multiplicities)
+
+    n_sq = np.nonzero(counts)[0]
+    if n_sq.size == 0:
+        return 0, 0
+    magnitudes = two_pi * np.sqrt(n_sq.astype(np.float64)) / float(cell_length)
+    keep = (magnitudes > float(lower)) & (magnitudes <= float(upper))
+    n_sq = n_sq[keep]
+    magnitudes = magnitudes[keep]
+    if magnitudes.size == 0:
+        return 0, 0
+    selected_magnitudes = _filter_by_resolution(magnitudes, float(resolution), dtype=np.float64)
+    selected_sq = n_sq[np.isin(np.round(magnitudes, 12), np.round(selected_magnitudes, 12))]
+    return int(selected_magnitudes.size), int(counts[selected_sq].sum())
+
+
+def _generic_k_count_for_tier(
+    cell: tuple[float, float, float],
+    lower: float,
+    upper: float,
+    resolution: float,
+) -> tuple[int, int]:
+    if upper <= lower:
+        return 0, 0
+    Lx_use, Ly_use, Lz_use = (float(value) for value in cell)
+    two_pi = float(2.0 * np.pi)
+    nxmax = int(np.ceil(float(upper) * Lx_use / two_pi))
+    nymax = int(np.ceil(float(upper) * Ly_use / two_pi))
+    nzmax = int(np.ceil(float(upper) * Lz_use / two_pi))
+    if nxmax <= 0 and nymax <= 0 and nzmax <= 0:
+        return 0, 0
+
+    z_values = np.arange(0, nzmax + 1, dtype=np.float64)
+    z_terms = (z_values / Lz_use) ** 2
+    z_mult = np.where(z_values > 0.0, 2, 1).astype(np.int64)
+    rounded_counts: dict[float, int] = {}
+    for nx in range(0, nxmax + 1):
+        x_term = (float(nx) / Lx_use) ** 2
+        nx_mult = 2 if nx > 0 else 1
+        for ny in range(0, nymax + 1):
+            y_term = (float(ny) / Ly_use) ** 2
+            ny_mult = 2 if ny > 0 else 1
+            magnitudes = two_pi * np.sqrt(x_term + y_term + z_terms)
+            if nx == 0 and ny == 0:
+                magnitudes = magnitudes[1:]
+                multiplicities = z_mult[1:] * nx_mult * ny_mult
+            else:
+                multiplicities = z_mult * nx_mult * ny_mult
+            keep = (magnitudes > float(lower)) & (magnitudes <= float(upper))
+            for magnitude, multiplicity in zip(magnitudes[keep], multiplicities[keep], strict=False):
+                key = round(float(magnitude), 12)
+                rounded_counts[key] = rounded_counts.get(key, 0) + int(multiplicity)
+
+    if not rounded_counts:
+        return 0, 0
+    magnitudes = np.asarray(sorted(rounded_counts), dtype=np.float64)
+    selected_magnitudes = _filter_by_resolution(magnitudes, float(resolution), dtype=np.float64)
+    selected_keys = {round(float(value), 12) for value in selected_magnitudes}
+    vector_count = sum(count for key, count in rounded_counts.items() if key in selected_keys)
+    return int(selected_magnitudes.size), int(vector_count)
+
+
+def charge_dipole_k_count_three_tier(
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    kmax1: float,
+    kmax2: float,
+    kmax3: float,
+    res1: float,
+    res2: float,
+    res3: float,
+    cell_dimensions: Any | None = None,
+) -> tuple[int, int]:
+    """Return selected |k| and directional-vector counts without storing k vectors."""
+    if kmax1 < 0 or kmax2 <= 0 or kmax3 <= 0:
+        raise ValueError("kmax values must satisfy kmax1 >= 0, kmax2 > 0, and kmax3 > 0.")
+    if kmax1 > kmax2 or kmax2 > kmax3:
+        raise ValueError("kmax values must satisfy kmax1 <= kmax2 <= kmax3.")
+    if float(res1) <= 0 or float(res2) <= 0 or float(res3) <= 0:
+        raise ValueError("k resolutions must be positive.")
+
+    dims = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
+    magnitude_count = 0
+    vector_count = 0
+    for cell, lower, upper, resolution in (
+        (dims[0], 0.0, float(kmax1), float(res1)),
+        (dims[1], float(kmax1), float(kmax2), float(res2)),
+        (dims[2], float(kmax2), float(kmax3), float(res3)),
+    ):
+        if _is_cubic_cell(cell):
+            tier_magnitudes, tier_vectors = _cubic_k_count_for_tier(float(cell[0]), lower, upper, resolution)
+        else:
+            tier_magnitudes, tier_vectors = _generic_k_count_for_tier(cell, lower, upper, resolution)
+        magnitude_count += tier_magnitudes
+        vector_count += tier_vectors
+    return int(magnitude_count), int(vector_count)
+
+
 def density_k_magnitudes_by_resolution_three_tier(
     Lx: float,
     Ly: float,
@@ -2055,6 +2351,636 @@ def _spherical_bessel_j1(values: np.ndarray) -> np.ndarray:
         xl = x[~small]
         out[~small] = np.sin(xl) / (xl * xl) - np.cos(xl) / xl
     return out
+
+
+def _charge_charge_normalization(charges1_count: int, charges2_count: int) -> float:
+    return float(np.sqrt(float(charges1_count) * float(charges2_count)))
+
+
+def _charge_charge_overlap_pairs(indices1: np.ndarray, indices2: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    positions2 = {int(value): pos for pos, value in enumerate(np.asarray(indices2, dtype=np.int64))}
+    pairs1: list[int] = []
+    pairs2: list[int] = []
+    for pos1, value in enumerate(np.asarray(indices1, dtype=np.int64)):
+        pos2 = positions2.get(int(value))
+        if pos2 is not None:
+            pairs1.append(pos1)
+            pairs2.append(pos2)
+    return np.asarray(pairs1, dtype=np.int64), np.asarray(pairs2, dtype=np.int64)
+
+
+def _charge_charge_pair_blocks(
+    coords1: np.ndarray,
+    coords2: np.ndarray,
+    charges1: np.ndarray,
+    charges2: np.ndarray,
+    indices1: np.ndarray,
+    indices2: np.ndarray,
+    *,
+    same_source: bool,
+    exclude_self_pairs: bool,
+    box: np.ndarray | None,
+    cutoff: float | None,
+    charge_chunk: int,
+) -> Any:
+    cutoff_sq = None if cutoff is None else float(cutoff) ** 2
+    for i0 in range(0, int(coords1.shape[0]), int(charge_chunk)):
+        i1 = min(int(coords1.shape[0]), i0 + int(charge_chunk))
+        r1 = coords1[i0:i1]
+        z1 = charges1[i0:i1]
+        idx1 = indices1[i0:i1]
+        for j0 in range(0, int(coords2.shape[0]), int(charge_chunk)):
+            j1 = min(int(coords2.shape[0]), j0 + int(charge_chunk))
+            r2 = coords2[j0:j1]
+            z2 = charges2[j0:j1]
+            idx2 = indices2[j0:j1]
+
+            dr = r2[None, :, :] - r1[:, None, :]
+            if box is not None:
+                dr -= box * np.rint(dr / box)
+            weights = z1[:, None] * z2[None, :]
+            keep = np.ones(weights.shape, dtype=bool)
+            if cutoff_sq is not None:
+                keep &= np.sum(dr * dr, axis=2) <= cutoff_sq
+            if same_source and exclude_self_pairs:
+                keep &= idx1[:, None] != idx2[None, :]
+            if not np.any(keep):
+                continue
+            yield (
+                np.ascontiguousarray(dr[keep], dtype=np.float64),
+                np.ascontiguousarray(weights[keep], dtype=np.float64),
+            )
+
+
+def charge_charge_structure_factor_isotropic(
+    k_magnitudes: np.ndarray,
+    coords1: np.ndarray,
+    charge_values1: np.ndarray,
+    coords2: np.ndarray,
+    charge_values2: np.ndarray,
+    particle_indices1: np.ndarray | None = None,
+    particle_indices2: np.ndarray | None = None,
+    *,
+    same_source: bool = False,
+    exclude_self_pairs: bool = False,
+    cutoff: float | None = None,
+    cell_size: float | None = None,
+    box: np.ndarray | None = None,
+    frame_chunk: int | None = None,
+    charge_chunk: int | None = None,
+    k_chunk: int = 256,
+    dtype: Any = np.float64,
+    normalize_by_frames: bool = True,
+    status_logger: _StatusLogger | None = None,
+) -> np.ndarray:
+    k_vals_use = np.asarray(k_magnitudes, dtype=dtype)
+    r1_all = np.asarray(coords1, dtype=dtype)
+    r2_all = np.asarray(coords2, dtype=dtype)
+    z1_all = np.asarray(charge_values1, dtype=dtype).reshape(-1)
+    z2_all = np.asarray(charge_values2, dtype=dtype).reshape(-1)
+    if r1_all.ndim != 3 or r1_all.shape[2] != 3 or r2_all.ndim != 3 or r2_all.shape[2] != 3:
+        raise ValueError("Charge-charge coordinates must have shape (frames, charges, 3).")
+    if r1_all.shape[0] != r2_all.shape[0]:
+        raise ValueError("Charge-charge coordinate inputs must have the same frame count.")
+    if r1_all.shape[1] != z1_all.shape[0] or r2_all.shape[1] != z2_all.shape[0]:
+        raise ValueError("Charge counts must match charge-coordinate particle counts.")
+    if k_vals_use.ndim != 1 or k_vals_use.shape[0] <= 0:
+        raise ValueError("At least one isotropic charge-charge k magnitude is required.")
+    if box is not None:
+        box = np.asarray(box, dtype=np.float64)
+        if box.shape != (3,) or np.any(box <= 0):
+            raise ValueError("box must contain three positive lengths.")
+
+    idx1_all = np.arange(z1_all.shape[0], dtype=np.int64) if particle_indices1 is None else np.asarray(particle_indices1, dtype=np.int64)
+    idx2_all = np.arange(z2_all.shape[0], dtype=np.int64) if particle_indices2 is None else np.asarray(particle_indices2, dtype=np.int64)
+    keep1 = z1_all != 0.0
+    keep2 = z2_all != 0.0
+    r1_all = np.ascontiguousarray(r1_all[:, keep1, :], dtype=np.float64)
+    r2_all = np.ascontiguousarray(r2_all[:, keep2, :], dtype=np.float64)
+    z1 = np.ascontiguousarray(z1_all[keep1], dtype=np.float64)
+    z2 = np.ascontiguousarray(z2_all[keep2], dtype=np.float64)
+    idx1 = np.ascontiguousarray(idx1_all[keep1], dtype=np.int64)
+    idx2 = np.ascontiguousarray(idx2_all[keep2], dtype=np.int64)
+    if z1.size == 0 or z2.size == 0:
+        return np.zeros(k_vals_use.shape[0], dtype=dtype)
+
+    cutoff, _cell_size = _validate_cutoff_and_cell_size(cutoff, cell_size, label="Charge-charge structure factor")
+    norm = _charge_charge_normalization(int(z1.size), int(z2.size))
+    frame_count = int(r1_all.shape[0])
+    frame_chunk_use = _resolve_chunk_length(frame_chunk, frame_count)
+    charge_chunk_use = _resolve_chunk_length(charge_chunk, max(int(z1.size), int(z2.size)))
+    k_chunk_use = _resolve_chunk_length(k_chunk, int(k_vals_use.shape[0]))
+    out_total = np.zeros(k_vals_use.shape[0], dtype=np.float64)
+
+    for f0 in range(0, frame_count, frame_chunk_use):
+        f1 = min(frame_count, f0 + frame_chunk_use)
+        for frame_index in range(f0, f1):
+            frame_out = np.zeros(k_vals_use.shape[0], dtype=np.float64)
+            for dr_block, weights in _charge_charge_pair_blocks(
+                r1_all[frame_index],
+                r2_all[frame_index],
+                z1,
+                z2,
+                idx1,
+                idx2,
+                same_source=same_source,
+                exclude_self_pairs=exclude_self_pairs,
+                box=box,
+                cutoff=cutoff,
+                charge_chunk=charge_chunk_use,
+            ):
+                dist = np.sqrt(np.sum(dr_block * dr_block, axis=1))
+                for k0 in range(0, int(k_vals_use.shape[0]), k_chunk_use):
+                    k1 = min(int(k_vals_use.shape[0]), k0 + k_chunk_use)
+                    x = np.outer(k_vals_use[k0:k1], dist)
+                    frame_out[k0:k1] += np.sum(weights[None, :] * np.sinc(x / np.pi), axis=1)
+            out_total += frame_out / norm
+            if status_logger is not None:
+                status_logger.charge_charge(frame_index + 1, int(z1.size), int(z2.size), int(k_vals_use.shape[0]))
+
+    if normalize_by_frames:
+        out_total /= float(frame_count)
+    if status_logger is not None:
+        status_logger.charge_charge(frame_count, int(z1.size), int(z2.size), int(k_vals_use.shape[0]), force=True)
+    return out_total.astype(dtype, copy=False)
+
+
+def charge_charge_structure_factor_directional(
+    k_vectors_array: np.ndarray,
+    coords1: np.ndarray,
+    charge_values1: np.ndarray,
+    coords2: np.ndarray,
+    charge_values2: np.ndarray,
+    particle_indices1: np.ndarray | None = None,
+    particle_indices2: np.ndarray | None = None,
+    *,
+    same_source: bool = False,
+    exclude_self_pairs: bool = False,
+    cutoff: float | None = None,
+    cell_size: float | None = None,
+    box: np.ndarray | None = None,
+    frame_chunk: int | None = None,
+    charge_chunk: int | None = None,
+    k_chunk: int = 256,
+    dtype: Any = np.float64,
+    normalize_by_frames: bool = True,
+    status_logger: _StatusLogger | None = None,
+) -> np.ndarray:
+    k_vectors_use = np.asarray(k_vectors_array, dtype=dtype)
+    r1_all = np.asarray(coords1, dtype=dtype)
+    r2_all = np.asarray(coords2, dtype=dtype)
+    z1_all = np.asarray(charge_values1, dtype=dtype).reshape(-1)
+    z2_all = np.asarray(charge_values2, dtype=dtype).reshape(-1)
+    if r1_all.ndim != 3 or r1_all.shape[2] != 3 or r2_all.ndim != 3 or r2_all.shape[2] != 3:
+        raise ValueError("Charge-charge coordinates must have shape (frames, charges, 3).")
+    if r1_all.shape[0] != r2_all.shape[0]:
+        raise ValueError("Charge-charge coordinate inputs must have the same frame count.")
+    if r1_all.shape[1] != z1_all.shape[0] or r2_all.shape[1] != z2_all.shape[0]:
+        raise ValueError("Charge counts must match charge-coordinate particle counts.")
+    if k_vectors_use.ndim != 2 or k_vectors_use.shape[1] != 3 or k_vectors_use.shape[0] <= 0:
+        raise ValueError("At least one directional charge-charge k vector is required.")
+    if box is not None:
+        box = np.asarray(box, dtype=np.float64)
+        if box.shape != (3,) or np.any(box <= 0):
+            raise ValueError("box must contain three positive lengths.")
+
+    idx1_all = np.arange(z1_all.shape[0], dtype=np.int64) if particle_indices1 is None else np.asarray(particle_indices1, dtype=np.int64)
+    idx2_all = np.arange(z2_all.shape[0], dtype=np.int64) if particle_indices2 is None else np.asarray(particle_indices2, dtype=np.int64)
+    keep1 = z1_all != 0.0
+    keep2 = z2_all != 0.0
+    r1_all = np.ascontiguousarray(r1_all[:, keep1, :], dtype=np.float64)
+    r2_all = np.ascontiguousarray(r2_all[:, keep2, :], dtype=np.float64)
+    z1 = np.ascontiguousarray(z1_all[keep1], dtype=np.float64)
+    z2 = np.ascontiguousarray(z2_all[keep2], dtype=np.float64)
+    idx1 = np.ascontiguousarray(idx1_all[keep1], dtype=np.int64)
+    idx2 = np.ascontiguousarray(idx2_all[keep2], dtype=np.int64)
+    if z1.size == 0 or z2.size == 0:
+        return np.zeros(k_vectors_use.shape[0], dtype=np.complex128)
+
+    cutoff, _cell_size = _validate_cutoff_and_cell_size(cutoff, cell_size, label="Charge-charge structure factor")
+    norm = _charge_charge_normalization(int(z1.size), int(z2.size))
+    frame_count = int(r1_all.shape[0])
+    frame_chunk_use = _resolve_chunk_length(frame_chunk, frame_count)
+    charge_chunk_use = _resolve_chunk_length(charge_chunk, max(int(z1.size), int(z2.size)))
+    k_chunk_use = _resolve_chunk_length(k_chunk, int(k_vectors_use.shape[0]))
+    out_total = np.zeros(k_vectors_use.shape[0], dtype=np.complex128)
+
+    overlap1 = np.empty(0, dtype=np.int64)
+    overlap2 = np.empty(0, dtype=np.int64)
+    if cutoff is None and same_source and exclude_self_pairs:
+        overlap1, overlap2 = _charge_charge_overlap_pairs(idx1, idx2)
+
+    for f0 in range(0, frame_count, frame_chunk_use):
+        f1 = min(frame_count, f0 + frame_chunk_use)
+        for frame_index in range(f0, f1):
+            frame_out = np.zeros(k_vectors_use.shape[0], dtype=np.complex128)
+            if cutoff is None:
+                r1_frame = r1_all[frame_index]
+                r2_frame = r2_all[frame_index]
+                for k0 in range(0, int(k_vectors_use.shape[0]), k_chunk_use):
+                    k1 = min(int(k_vectors_use.shape[0]), k0 + k_chunk_use)
+                    k_block = np.asarray(k_vectors_use[k0:k1], dtype=np.float64)
+                    phase1 = np.matmul(r1_frame, k_block.T)
+                    phase2 = np.matmul(r2_frame, k_block.T)
+                    q1 = np.sum(z1[:, None] * np.exp(-1j * phase1), axis=0)
+                    q2 = np.sum(z2[:, None] * np.exp(1j * phase2), axis=0)
+                    frame_out[k0:k1] = q1 * q2
+                    if overlap1.size > 0:
+                        frame_out[k0:k1] -= np.sum(z1[overlap1] * z2[overlap2])
+            else:
+                for dr_block, weights in _charge_charge_pair_blocks(
+                    r1_all[frame_index],
+                    r2_all[frame_index],
+                    z1,
+                    z2,
+                    idx1,
+                    idx2,
+                    same_source=same_source,
+                    exclude_self_pairs=exclude_self_pairs,
+                    box=box,
+                    cutoff=cutoff,
+                    charge_chunk=charge_chunk_use,
+                ):
+                    for k0 in range(0, int(k_vectors_use.shape[0]), k_chunk_use):
+                        k1 = min(int(k_vectors_use.shape[0]), k0 + k_chunk_use)
+                        phase = np.matmul(dr_block, np.asarray(k_vectors_use[k0:k1], dtype=np.float64).T)
+                        frame_out[k0:k1] += np.sum(weights[None, :] * np.exp(1j * phase), axis=1)
+            out_total += frame_out / norm
+            if status_logger is not None:
+                status_logger.charge_charge(frame_index + 1, int(z1.size), int(z2.size), int(k_vectors_use.shape[0]))
+
+    if normalize_by_frames:
+        out_total /= float(frame_count)
+    if status_logger is not None:
+        status_logger.charge_charge(frame_count, int(z1.size), int(z2.size), int(k_vectors_use.shape[0]), force=True)
+    return out_total
+
+
+def _charge_charge_output_header(
+    *,
+    mode: str,
+    charges_path1: str,
+    charges_path2: str,
+    coords_pattern1: str,
+    coords_pattern2: str,
+    coords_stride1: int,
+    coords_stride2: int,
+    coords_slice1: Any,
+    coords_slice2: Any,
+    real_cell_index: int,
+    real_cell_box: np.ndarray | tuple[float, float, float],
+    cutoff_primary: float | None,
+    cutoff_secondary: float | None,
+    cutoff_tertiary: float | None,
+    cell_size_primary: float | None,
+    cell_size_secondary: float | None,
+    cell_size_tertiary: float | None,
+    frame_count: int,
+    trajectory_count: int,
+    trajectory_selection: str | None,
+    exclude_self_pairs: bool,
+) -> str:
+    columns = "k      Sq(k)" if mode == "isotropic" else "kx      ky      kz      |k|      Re[Sq(k)]      Im[Sq(k)]"
+    formula = (
+        "Formula: Sq(k) = (1/sqrt(N1*N2)) * sum_m sum_n z1_m z2_n sinc(k |r2_n-r1_m|)"
+        if mode == "isotropic"
+        else "Formula: Sq(kvec) = (1/sqrt(N1*N2)) * sum_m sum_n z1_m z2_n exp(i kvec . (r2_n-r1_m))"
+    )
+    lines = [
+        "This file contains frame-averaged charge-charge structure-factor values.",
+        columns,
+        "######################",
+        f"Calculation mode: {mode} charge-charge structure factor",
+        "Frame normalization: average over processed frames",
+        formula,
+        f"Charges Path 1: {charges_path1}",
+        f"Charges Path 2: {charges_path2}",
+        f"Coordinate Path 1: {coords_pattern1}",
+        f"Coordinate Path 2: {coords_pattern2}",
+        f"Coordinate Path 1 stride: {int(coords_stride1)}",
+        f"Coordinate Path 2 stride: {int(coords_stride2)}",
+        f"Coordinate Path 1 slicing: {_format_header_value(coords_slice1)}",
+        f"Coordinate Path 2 slicing: {_format_header_value(coords_slice2)}",
+        "Real-space minimum-image cell: "
+        f"Cell {int(real_cell_index)} "
+        f"({_format_header_value(float(real_cell_box[0]))}, "
+        f"{_format_header_value(float(real_cell_box[1]))}, "
+        f"{_format_header_value(float(real_cell_box[2]))})",
+        f"Cutoffs: CO-1={_format_header_value(cutoff_primary)}, CO-2={_format_header_value(cutoff_secondary)}, CO-3={_format_header_value(cutoff_tertiary)}",
+        f"Cell sizes: CS-1={_format_header_value(cell_size_primary)}, CS-2={_format_header_value(cell_size_secondary)}, CS-3={_format_header_value(cell_size_tertiary)}",
+        f"Exclude self-pairs: {bool(exclude_self_pairs)}",
+        f"Total frames accumulated: {int(frame_count)}",
+        f"Trajectories summed: {int(trajectory_count)}",
+        f"Trajectory selection: {_format_header_value(trajectory_selection)}",
+    ]
+    return "\n".join(lines)
+
+
+def compute_charge_charge_structure_factor_from_files(
+    *,
+    baseDir: str,
+    charges_path1: str,
+    charges_path2: str | None = None,
+    coords_pattern1: str,
+    coords_stride1: int = 1,
+    coords_slice1: Any = "",
+    coords_pattern2: str | None = None,
+    coords_stride2: int | None = None,
+    coords_slice2: Any = "",
+    output_file: str,
+    mode: str,
+    k_max_primary: float,
+    k_max_secondary: float,
+    k_max_tertiary: float,
+    k_resolution_primary: float,
+    k_resolution_secondary: float,
+    k_resolution_tertiary: float,
+    Lx: float,
+    Ly: float,
+    Lz: float,
+    cell_dimensions: Any | None = None,
+    real_cell_index: int = 1,
+    cutoff_primary: float | None = None,
+    cutoff_secondary: float | None = None,
+    cutoff_tertiary: float | None = None,
+    cell_size_primary: float | None = None,
+    cell_size_secondary: float | None = None,
+    cell_size_tertiary: float | None = None,
+    num_trajectories: int | None = None,
+    trajectory_selection: str | None = None,
+    frame_window: tuple[int, int | None, int] | None = None,
+    frame_chunk: int | None = None,
+    charge_chunk: int | None = None,
+    k_chunk: int | None = 64,
+    input_io_spec: dict[str, Any] | None = None,
+    charge_values_io_spec: dict[str, Any] | None = None,
+    output_io_spec: dict[str, Any] | None = None,
+    exclude_self_pairs: bool = False,
+) -> dict[str, Any]:
+    overall_start = time.time()
+    mode_use = str(mode or "").strip().lower()
+    if mode_use not in {"isotropic", "directional"}:
+        raise ValueError("Charge-charge mode must be 'isotropic' or 'directional'.")
+    k_max_primary, k_max_secondary, k_max_tertiary, k_resolution_primary, k_resolution_secondary, k_resolution_tertiary = _resolve_three_tier_k_parameters(
+        k_max_primary,
+        k_max_secondary,
+        k_max_tertiary,
+        k_resolution_primary,
+        k_resolution_secondary,
+        k_resolution_tertiary,
+    )
+    resolved_cell_dimensions = _resolve_three_tier_cell_dimensions(Lx, Ly, Lz, cell_dimensions)
+    resolved_real_cell_index, box = _real_space_box_from_cell_dimensions(resolved_cell_dimensions, real_cell_index)
+    cutoff_primary, cutoff_secondary, cutoff_tertiary = _resolve_three_tier_cutoffs(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        legacy_cutoff=None,
+    )
+    cell_size_primary, cell_size_secondary, cell_size_tertiary = _resolve_three_tier_cell_sizes(
+        cutoff_primary,
+        cutoff_secondary,
+        cutoff_tertiary,
+        cell_size_primary,
+        cell_size_secondary,
+        cell_size_tertiary,
+        legacy_cell_size=None,
+    )
+    if int(coords_stride1) <= 0:
+        raise ValueError("Coordinate Path 1 stride must be positive.")
+    coords_stride2_use = int(coords_stride1 if coords_stride2 is None else coords_stride2)
+    if coords_stride2_use <= 0:
+        raise ValueError("Coordinate Path 2 stride must be positive.")
+    if k_chunk is not None and int(k_chunk) <= 0:
+        raise ValueError("k_chunk must be positive when provided.")
+    if charge_chunk is not None and int(charge_chunk) <= 0:
+        raise ValueError("charge_chunk must be positive when provided.")
+
+    for label, pattern in [
+        ("Coordinate Path 1", coords_pattern1),
+        ("Coordinate Path 2", coords_pattern2 or coords_pattern1),
+    ]:
+        is_valid, error_message = validate_path_pattern(pattern)
+        if not is_valid:
+            raise ValueError(f"Invalid {label}: {error_message}")
+
+    charges_file1 = _resolve_data_path(baseDir, charges_path1)
+    charges_path2_use = str(charges_path2 or "").strip() or str(charges_path1)
+    charges_file2 = _resolve_data_path(baseDir, charges_path2_use)
+    if not os.path.isfile(charges_file1):
+        raise FileNotFoundError(f"Charges Path 1 file not found: {charges_file1}")
+    if not os.path.isfile(charges_file2):
+        raise FileNotFoundError(f"Charges Path 2 file not found: {charges_file2}")
+    charge_values1_all = _load_charge_values(charges_file1, charge_values_io_spec, None)
+    charge_values2_all = charge_values1_all if os.path.abspath(charges_file2) == os.path.abspath(charges_file1) else _load_charge_values(charges_file2, charge_values_io_spec, None)
+
+    files1_all = _discover_coordinate_files(baseDir, coords_pattern1)
+    if str(coords_pattern2 or "").strip():
+        files2_all = _discover_coordinate_files(baseDir, str(coords_pattern2))
+        if len(files1_all) != len(files2_all):
+            raise ValueError(
+                "Charge-charge Coordinate Path 1 and Coordinate Path 2 must resolve to the same number of files "
+                f"when Coordinate Path 2 is enabled; got {len(files1_all)} and {len(files2_all)}."
+            )
+    else:
+        files2_all = files1_all
+    trajectory_indices = _selected_trajectory_indices(len(files1_all), num_trajectories, trajectory_selection)
+    selected_file_indices = [index + 1 for index in trajectory_indices]
+    files1 = [files1_all[index] for index in trajectory_indices]
+    files2 = [files2_all[index] for index in trajectory_indices]
+
+    if mode_use == "isotropic":
+        k_values = charge_dipole_k_magnitudes_by_resolution_three_tier(
+            float(Lx), float(Ly), float(Lz),
+            float(k_max_primary), float(k_max_secondary), float(k_max_tertiary),
+            res1=float(k_resolution_primary), res2=float(k_resolution_secondary), res3=float(k_resolution_tertiary),
+            cell_dimensions=resolved_cell_dimensions,
+        )
+        if k_values.shape[0] == 0:
+            raise ValueError("No charge-charge |k| values were generated. Increase k max values or verify the box lengths.")
+        total_values = np.zeros(k_values.shape[0], dtype=np.float64)
+    else:
+        _k_magnitudes, k_vectors = charge_dipole_k_vectors_three_tier(
+            float(Lx), float(Ly), float(Lz),
+            float(k_max_primary), float(k_max_secondary), float(k_max_tertiary),
+            res1=float(k_resolution_primary), res2=float(k_resolution_secondary), res3=float(k_resolution_tertiary),
+            cell_dimensions=resolved_cell_dimensions,
+        )
+        if k_vectors.shape[0] == 0:
+            raise ValueError("No charge-charge k vectors were generated. Increase k max values or verify the box lengths.")
+        k_values = k_vectors
+        k_magnitudes = np.linalg.norm(k_vectors, axis=1)
+        total_values = np.zeros(k_vectors.shape[0], dtype=np.complex128)
+
+    output_path = _resolve_output_path(baseDir, output_file)
+    status_log_path = _status_log_path_for_output(output_path)
+    total_frames = 0
+    per_file_stats: list[dict[str, Any]] = []
+
+    print("=" * 60, flush=True)
+    print(f"CHARGE-CHARGE STRUCTURE FACTOR CALCULATION ({mode_use.upper()})", flush=True)
+    print("=" * 60, flush=True)
+    print(f"Charges Path 1: {charges_path1}", flush=True)
+    print(f"Charges Path 2: {charges_path2_use}", flush=True)
+    print(f"Coordinate Path 1: {coords_pattern1}", flush=True)
+    print(f"Coordinate Path 2: {coords_pattern2 or coords_pattern1}", flush=True)
+    print(f"Output path: {output_file}", flush=True)
+    print(f"self-pair exclusion: {'enabled' if exclude_self_pairs else 'disabled'}", flush=True)
+    print(
+        "real-space minimum-image cell: "
+        f"Cell {resolved_real_cell_index} "
+        f"({float(box[0]):.8f}, {float(box[1]):.8f}, {float(box[2]):.8f})",
+        flush=True,
+    )
+
+    tier_magnitudes = np.asarray(k_values if mode_use == "isotropic" else k_magnitudes, dtype=np.float64)
+    tier_masks = _three_tier_masks_from_magnitudes(tier_magnitudes, k_max_primary, k_max_secondary, k_max_tertiary)
+    for file_index, coord_file1, coord_file2 in zip(selected_file_indices, files1, files2, strict=False):
+        trajectory_start = time.time()
+        print(f"\nProcessing charge-charge file set {file_index} ({len(per_file_stats) + 1}/{len(files1)})", flush=True)
+        coords1_raw = load_numeric_array(coord_file1, input_io_spec, default_mode="text", default_precision="double")
+        coords2_raw = coords1_raw if os.path.abspath(coord_file2) == os.path.abspath(coord_file1) else load_numeric_array(coord_file2, input_io_spec, default_mode="text", default_precision="double")
+        coords1 = _prepare_xyz_frames(coords1_raw, name=str(coord_file1))
+        coords2 = _prepare_xyz_frames(coords2_raw, name=str(coord_file2))
+        if int(coords1.shape[1]) != int(charge_values1_all.shape[0]):
+            raise ValueError(f"Charges Path 1 has {charge_values1_all.shape[0]} values but Coordinate Path 1 file {file_index} has {coords1.shape[1]} sites.")
+        if int(coords2.shape[1]) != int(charge_values2_all.shape[0]):
+            raise ValueError(f"Charges Path 2 has {charge_values2_all.shape[0]} values but Coordinate Path 2 file {file_index} has {coords2.shape[1]} sites.")
+        coords1 = _apply_frame_stride(coords1, int(coords_stride1), label="Coordinate Path 1")
+        coords2 = _apply_frame_stride(coords2, coords_stride2_use, label="Coordinate Path 2")
+        coords1, charges1, particle_indices1 = _apply_coordinate_slice_with_particles(
+            coords1,
+            charge_values1_all,
+            coords_slice1,
+            label="Coordinate Path 1 slicing",
+        )
+        coords2, charges2, particle_indices2 = _apply_coordinate_slice_with_particles(
+            coords2,
+            charge_values2_all,
+            coords_slice2,
+            label="Coordinate Path 2 slicing",
+        )
+        coords1 = _apply_frame_window(coords1, frame_window)
+        coords2 = _apply_frame_window(coords2, frame_window)
+        if int(coords1.shape[0]) != int(coords2.shape[0]):
+            raise ValueError(
+                "Coordinate Path 1 and Coordinate Path 2 must have the same frame count after stride/slicing/windowing; "
+                f"got {coords1.shape[0]} and {coords2.shape[0]} for file set {file_index}."
+            )
+        frame_count = int(coords1.shape[0])
+        status_logger = _StatusLogger(status_log_path, overall_start, trajectory_index=int(file_index))
+        status_logger.trajectory_total_frames(frame_count)
+        same_source = os.path.abspath(coord_file1) == os.path.abspath(coord_file2) and os.path.abspath(charges_file1) == os.path.abspath(charges_file2)
+        file_values = np.zeros_like(total_values)
+        for mask, tier_cutoff, tier_cell_size in zip(
+            tier_masks,
+            (cutoff_primary, cutoff_secondary, cutoff_tertiary),
+            (cell_size_primary, cell_size_secondary, cell_size_tertiary),
+            strict=False,
+        ):
+            if not np.any(mask):
+                continue
+            if mode_use == "isotropic":
+                file_values[mask] = charge_charge_structure_factor_isotropic(
+                    k_values[mask],
+                    coords1,
+                    charges1,
+                    coords2,
+                    charges2,
+                    particle_indices1,
+                    particle_indices2,
+                    same_source=same_source,
+                    exclude_self_pairs=exclude_self_pairs,
+                    cutoff=tier_cutoff,
+                    cell_size=tier_cell_size,
+                    box=box,
+                    frame_chunk=frame_chunk,
+                    charge_chunk=charge_chunk,
+                    k_chunk=k_chunk,
+                    normalize_by_frames=False,
+                    status_logger=status_logger,
+                )
+            else:
+                file_values[mask] = charge_charge_structure_factor_directional(
+                    k_values[mask],
+                    coords1,
+                    charges1,
+                    coords2,
+                    charges2,
+                    particle_indices1,
+                    particle_indices2,
+                    same_source=same_source,
+                    exclude_self_pairs=exclude_self_pairs,
+                    cutoff=tier_cutoff,
+                    cell_size=tier_cell_size,
+                    box=box,
+                    frame_chunk=frame_chunk,
+                    charge_chunk=charge_chunk,
+                    k_chunk=k_chunk,
+                    normalize_by_frames=False,
+                    status_logger=status_logger,
+                )
+        total_values += file_values
+        total_frames += frame_count
+        per_file_stats.append(
+            {
+                "coordinate_file1": coord_file1,
+                "coordinate_file2": coord_file2,
+                "frame_count": frame_count,
+                "elapsed_s": float(time.time() - trajectory_start),
+            }
+        )
+        print(f"  accumulated frames: {total_frames}", flush=True)
+
+    if total_frames <= 0:
+        raise ValueError("No frames were accumulated for the charge-charge structure-factor calculation.")
+    total_values = total_values / float(total_frames)
+    if mode_use == "isotropic":
+        output_array = np.column_stack((np.asarray(k_values, dtype=np.float64), np.asarray(total_values, dtype=np.float64)))
+        k_count = int(np.asarray(k_values).shape[0])
+    else:
+        complex_values = np.asarray(total_values, dtype=np.complex128)
+        output_array = np.column_stack((np.asarray(k_values, dtype=np.float64), k_magnitudes, complex_values.real, complex_values.imag))
+        k_count = int(np.asarray(k_values).shape[0])
+    save_numeric_array(
+        output_path,
+        output_array,
+        output_io_spec,
+        default_mode="text",
+        default_precision="double",
+        header=_charge_charge_output_header(
+            mode=mode_use,
+            charges_path1=charges_path1,
+            charges_path2=charges_path2_use,
+            coords_pattern1=coords_pattern1,
+            coords_pattern2=coords_pattern2 or coords_pattern1,
+            coords_stride1=int(coords_stride1),
+            coords_stride2=coords_stride2_use,
+            coords_slice1=coords_slice1,
+            coords_slice2=coords_slice2,
+            real_cell_index=resolved_real_cell_index,
+            real_cell_box=box,
+            cutoff_primary=cutoff_primary,
+            cutoff_secondary=cutoff_secondary,
+            cutoff_tertiary=cutoff_tertiary,
+            cell_size_primary=cell_size_primary,
+            cell_size_secondary=cell_size_secondary,
+            cell_size_tertiary=cell_size_tertiary,
+            frame_count=total_frames,
+            trajectory_count=len(per_file_stats),
+            trajectory_selection=trajectory_selection,
+            exclude_self_pairs=exclude_self_pairs,
+        ),
+    )
+    print(f"\nSaved {mode_use} charge-charge output: {output_path}", flush=True)
+    return {
+        "mode": mode_use,
+        "k_count": k_count,
+        "values": total_values,
+        "output_file": output_path,
+        "total_frames": int(total_frames),
+        "per_file_stats": per_file_stats,
+    }
 
 
 def charge_dipole_structure_factor_isotropic(
@@ -2601,6 +3527,7 @@ def compute_charge_dipole_structure_factor_from_files(
     isotropic_output_io_spec: dict[str, Any] | None = None,
     directional_output_io_spec: dict[str, Any] | None = None,
     small_k_approx: bool = False,
+    write_isotropic_output: bool = True,
     resume: bool = False,
 ) -> dict[str, Any]:
     overall_start = time.time()
@@ -2709,7 +3636,8 @@ def compute_charge_dipole_structure_factor_from_files(
     )
     if k_vectors_array.shape[0] == 0:
         raise ValueError("No charge-dipole k vectors were generated. Increase k max values or verify the box lengths.")
-    isotropic_output_path = _resolve_output_path(baseDir, isotropic_output_file)
+    aux_output_file = isotropic_output_file if bool(write_isotropic_output) else directional_output_file
+    isotropic_output_path = _resolve_output_path(baseDir, aux_output_file)
     directional_output_path = _resolve_output_path(baseDir, directional_output_file)
     status_log_path = _status_log_path_for_output(directional_output_path)
 
@@ -2744,7 +3672,10 @@ def compute_charge_dipole_structure_factor_from_files(
             print(f"Dipole magnitudes path: {dipole_magnitudes_pattern}", flush=True)
         else:
             print("Dipole magnitudes path: none; using norms of Dipole Vectors Path", flush=True)
-    print(f"Isotropic output path: {isotropic_output_file}", flush=True)
+    if write_isotropic_output:
+        print(f"Isotropic output path: {isotropic_output_file}", flush=True)
+    else:
+        print("Isotropic output path: disabled", flush=True)
     print(f"Directional output path: {directional_output_file}", flush=True)
     print(f"Status log path: {status_log_path}", flush=True)
     print(f"small-k approximation: {'enabled' if small_k_approx else 'disabled'}", flush=True)
@@ -2849,26 +3780,27 @@ def compute_charge_dipole_structure_factor_from_files(
                     np.asarray(existing_directional_report[:, 4], dtype=np.float64)
                     + 1j * np.asarray(existing_directional_report[:, 5], dtype=np.float64)
                 )
-                isotropic_report_path = _single_trajectory_report_path(isotropic_output_path, file_index)
-                if not os.path.isfile(isotropic_report_path):
-                    k_shell_single, isotropic_single, shell_counts_single = _shell_average_complex(
-                        k_magnitudes,
-                        directional_raw_single,
-                        float(shell_width),
-                    )
-                    isotropic_report_path = _write_single_trajectory_output(
-                        isotropic_output_path,
-                        file_index,
-                        np.column_stack((k_shell_single, isotropic_single.real, isotropic_single.imag, shell_counts_single)),
-                        isotropic_output_io_spec,
-                        default_mode="text",
-                        default_precision="double",
-                        header="\n".join((
-                            _CHARGE_DIPOLE_DIPOLE_NORMALIZATION_HEADER,
-                            "Frame/trajectory normalization: none",
-                        )),
-                    )
-                isotropic_single_trajectory_reports.append(isotropic_report_path)
+                if write_isotropic_output:
+                    isotropic_report_path = _single_trajectory_report_path(isotropic_output_path, file_index)
+                    if not os.path.isfile(isotropic_report_path):
+                        k_shell_single, isotropic_single, shell_counts_single = _shell_average_complex(
+                            k_magnitudes,
+                            directional_raw_single,
+                            float(shell_width),
+                        )
+                        isotropic_report_path = _write_single_trajectory_output(
+                            isotropic_output_path,
+                            file_index,
+                            np.column_stack((k_shell_single, isotropic_single.real, isotropic_single.imag, shell_counts_single)),
+                            isotropic_output_io_spec,
+                            default_mode="text",
+                            default_precision="double",
+                            header="\n".join((
+                                _CHARGE_DIPOLE_DIPOLE_NORMALIZATION_HEADER,
+                                "Frame/trajectory normalization: none",
+                            )),
+                        )
+                    isotropic_single_trajectory_reports.append(isotropic_report_path)
                 directional_single_trajectory_reports.append(directional_report_path)
                 dipoles_count_files.append(dipoles_count_file)
                 total_frames += int(frame_count)
@@ -3065,25 +3997,26 @@ def compute_charge_dipole_structure_factor_from_files(
                 "elapsed_s": elapsed_s,
             }
         )
-        k_shell_single, isotropic_single, shell_counts_single = _shell_average_complex(
-            k_magnitudes,
-            directional_raw_single,
-            float(shell_width),
-        )
-        isotropic_single_trajectory_reports.append(
-            _write_single_trajectory_output(
-                isotropic_output_path,
-                file_index,
-                np.column_stack((k_shell_single, isotropic_single.real, isotropic_single.imag, shell_counts_single)),
-                isotropic_output_io_spec,
-                default_mode="text",
-                default_precision="double",
-                header="\n".join((
-                    _CHARGE_DIPOLE_DIPOLE_NORMALIZATION_HEADER,
-                    "Frame/trajectory normalization: none",
-                )),
+        if write_isotropic_output:
+            k_shell_single, isotropic_single, shell_counts_single = _shell_average_complex(
+                k_magnitudes,
+                directional_raw_single,
+                float(shell_width),
             )
-        )
+            isotropic_single_trajectory_reports.append(
+                _write_single_trajectory_output(
+                    isotropic_output_path,
+                    file_index,
+                    np.column_stack((k_shell_single, isotropic_single.real, isotropic_single.imag, shell_counts_single)),
+                    isotropic_output_io_spec,
+                    default_mode="text",
+                    default_precision="double",
+                    header="\n".join((
+                        _CHARGE_DIPOLE_DIPOLE_NORMALIZATION_HEADER,
+                        "Frame/trajectory normalization: none",
+                    )),
+                )
+            )
         directional_report_path = _write_single_trajectory_output(
             directional_output_path,
             file_index,
@@ -3125,25 +4058,31 @@ def compute_charge_dipole_structure_factor_from_files(
         expected_prefix_columns=(0, 1, 2, 3),
     )
     directional_raw_total = directional_components[:, 0] + 1j * directional_components[:, 1]
-    k_shell, isotropic_shell, shell_counts = _shell_average_complex(k_magnitudes, directional_raw_total, float(shell_width))
-
-    isotropic_output_array = np.column_stack((k_shell, isotropic_shell.real, isotropic_shell.imag, shell_counts))
+    if write_isotropic_output:
+        k_shell, isotropic_shell, shell_counts = _shell_average_complex(k_magnitudes, directional_raw_total, float(shell_width))
+        isotropic_output_array = np.column_stack((k_shell, isotropic_shell.real, isotropic_shell.imag, shell_counts))
+    else:
+        k_shell = np.empty(0, dtype=np.float64)
+        isotropic_shell = np.empty(0, dtype=np.complex128)
+        shell_counts = np.empty(0, dtype=np.int64)
+        isotropic_output_array = None
     directional_output_array = np.column_stack((k_vectors_array, k_magnitudes, directional_raw_total.real, directional_raw_total.imag))
 
-    save_numeric_array(
-        isotropic_output_path,
-        isotropic_output_array,
-        isotropic_output_io_spec,
-        default_mode="text",
-        default_precision="double",
-        header="\n".join((
-            _CHARGE_DIPOLE_DIPOLE_NORMALIZATION_HEADER,
-            "Frame/trajectory normalization: none",
-        )),
-        column_names=("k", "Sqp_real", "Sqp_imag", "shell_count"),
-        compact_columns=(0, 3),
-        result_format=True,
-    )
+    if write_isotropic_output:
+        save_numeric_array(
+            isotropic_output_path,
+            isotropic_output_array,
+            isotropic_output_io_spec,
+            default_mode="text",
+            default_precision="double",
+            header="\n".join((
+                _CHARGE_DIPOLE_DIPOLE_NORMALIZATION_HEADER,
+                "Frame/trajectory normalization: none",
+            )),
+            column_names=("k", "Sqp_real", "Sqp_imag", "shell_count"),
+            compact_columns=(0, 3),
+            result_format=True,
+        )
     save_numeric_array(
         directional_output_path,
         directional_output_array,
@@ -3159,7 +4098,10 @@ def compute_charge_dipole_structure_factor_from_files(
         result_format=True,
     )
     overall_elapsed = time.time() - overall_start
-    print(f"\nSaved isotropic charge-dipole output: {isotropic_output_path}", flush=True)
+    if write_isotropic_output:
+        print(f"\nSaved isotropic charge-dipole output: {isotropic_output_path}", flush=True)
+    else:
+        print("\nIsotropic charge-dipole output disabled", flush=True)
     print(f"Saved directional charge-dipole output: {directional_output_path}", flush=True)
     print(f"Saved dipoles count outputs: {_dipoles_count_directory_for_output(isotropic_output_path)}", flush=True)
     print(f"total file sets used: {len(per_file_stats)}", flush=True)
@@ -3179,7 +4121,7 @@ def compute_charge_dipole_structure_factor_from_files(
         "isotropic_values": isotropic_shell,
         "shell_counts": shell_counts,
         "total_frames": int(total_frames),
-        "isotropic_output_file": isotropic_output_path,
+        "isotropic_output_file": isotropic_output_path if write_isotropic_output else None,
         "directional_output_file": directional_output_path,
         "small_k_approx": bool(small_k_approx),
         "dipoles_count_files": dipoles_count_files,

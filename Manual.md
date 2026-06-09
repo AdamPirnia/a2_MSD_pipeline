@@ -1088,8 +1088,9 @@ For generated file-based workflows, the charge-dipole sums below are evaluated f
 
 ### Charge-Dipole Fields
 
-- `Calculation Mode`: either `Directional` or `Isotropic`
-- `Small k approx`: when checked, uses the first-order small-`k` approximation for the selected charge-dipole mode
+- `Isotropic`: when checked, generates the direct isotropic charge-dipole output
+- `Directional`: when checked, generates the directional charge-dipole output
+- `Small k approx`: when checked, uses the first-order small-`k` approximation for the enabled charge-dipole sections
 - `Charge Values Path`: file containing the charge values; if multiple columns are present, the last column is used
 - `Charge Coordinates Path`: coordinate pattern for charge positions
 - `Charge Coordinates Stride`: frame stride for the charge-coordinate input
@@ -1098,8 +1099,8 @@ For generated file-based workflows, the charge-dipole sums below are evaluated f
 - `Dipole Vectors Path`: vector pattern for dipole directions; the GUI keeps its stride matched to the dipole-position stride
 - `Discard Dipoles With Magnitudes >`: optional threshold for masking unrealistic dipoles; if set, only dipoles with magnitude greater than the threshold are removed from that frame
 - `Dipole Magnitudes Path`: optional magnitude-file pattern used to find dipoles above the threshold; if omitted while the threshold is set, magnitudes are computed from the dipole-vector input
-- `Isotropic Output Path`: isotropic charge-dipole output file
-- `Directional Output Path`: directional charge-dipole output file; required only in directional mode
+- `Isotropic Output Path`: isotropic charge-dipole output file; required when `Isotropic` is checked
+- `Directional Output Path`: directional charge-dipole output file; required when `Directional` is checked
 - `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`
 - `Mask Charge Index/Indices`: optional zero-based charge index or comma-separated charge indices whose charge values are set to `0.0` before calculation; for example, `0, 67` masks Python entries `charges[0]` and `charges[67]`; the charge-coordinate array is not changed
 - `Trajectory desired length`: optional field with the same syntax as the density tab
@@ -1127,7 +1128,7 @@ where `q` is the charge site and `p` is the dipole position. This vector points 
 
 ### Charge-Dipole Directional Mode
 
-This mode writes both a directional table and an isotropic shell average derived from it.
+This mode writes a directional table.
 
 With `Small k approx` unchecked, the directional charge-dipole structure factor is:
 
@@ -1231,6 +1232,51 @@ The generated scripts may also write:
 - per-file-set reports such as `output_1.dat`, `output_2.dat`, and so on
 - `status.log`
 - `dipole_counts/dipole_count_<trajectory>.dat`
+
+## Charge-Charge Structure Factor Tab
+
+This tab computes charge-charge `S_q(k)` from one or two coordinate paths plus one or two charge-value files. If `Coordinate Path 2` is not enabled, the generated workflow reuses `Coordinate Path 1` with the same stride; the `Coordinate Path 2` slicing field remains active and is required, so two selections can still be taken from one coordinate source. If `Charges Path 2` is empty, `Charges Path 1` is reused.
+
+The charge files use the same charge-value convention as charge-dipole workflows: if a file has multiple columns, the last column is used as the charge value. Zero-charge sites are removed before accumulation.
+
+### Charge-Charge Fields
+
+- `Coordinate Path 1`: first charge-coordinate path pattern
+- `Coordinate Path 1 stride`: frame stride for the first coordinate input
+- `Coordinate Path 1 slicing`: RDF-style Python slicing applied after loading the first coordinate input
+- `Coordinate Path 2`: optional second charge-coordinate path pattern
+- `Coordinate Path 2 stride`: optional frame stride for the second coordinate input
+- `Coordinate Path 2 slicing`: required RDF-style Python slicing for the second side; it remains active even when `Coordinate Path 2` is disabled
+- `Charges Path 1`: first charge-values file
+- `Charges Path 2`: optional second charge-values file; blank reuses `Charges Path 1`
+- `Isotropic`: enables direct isotropic `S_q(k)` output
+- `Directional`: enables directional `S_q(k)` output
+- `Exclude self-pairs`: per-mode checkbox that omits same-site `m=n` terms when both sides refer to the same charge source
+- `Cell Dimensions`, `Wave Vectors`, `Cutoffs`, and `Trajectory desired length`: same three-tier controls used by the charge-dipole tab
+
+The directional charge-charge structure factor is:
+
+$$
+{\Huge
+S_q(\mathbf k)=
+\frac{1}{\sqrt{N_1N_2}}
+\sum_m\sum_n z_{1,m}z_{2,n}
+\exp\!\left(i\mathbf k\cdot(\mathbf r_{2,n}-\mathbf r_{1,m})\right)
+}
+$$
+
+The isotropic angular average is:
+
+$$
+{\Huge
+S_q(k)=
+\frac{1}{\sqrt{N_1N_2}}
+\sum_m\sum_n z_{1,m}z_{2,n}
+\frac{\sin(k|\mathbf r_{2,n}-\mathbf r_{1,m}|)}{k|\mathbf r_{2,n}-\mathbf r_{1,m}|}
+}
+$$
+
+For same-source calculations, `N_1=N_2=N_q`, so the normalization reduces to the requested `1/N_q` form. The outputs are averaged over processed frames.
 
 ## Static Structure Factor Output File Structures
 

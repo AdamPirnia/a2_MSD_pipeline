@@ -499,6 +499,32 @@ The directional small-`k` approximation is real-valued. The output keeps the dir
 
 The file-based charge-dipole workflows normalize each processed frame by the number of contributing dipoles for that frame, then accumulate the resulting `Sqp(k)` values across frames and trajectory files. They are not divided by the number of frames or trajectory files, matching the mode descriptions in [Charge-Dipole Isotropic Mode](Manual.md#charge-dipole-isotropic-mode) and [Charge-Dipole Directional Mode](Manual.md#charge-dipole-directional-mode).
 
+## Charge-Charge Structure Factors
+
+Charge-charge structure factors are described in [Charge-Charge Structure Factor Tab](Manual.md#charge-charge-structure-factor-tab). The directional calculation uses:
+
+$$
+{\Huge
+S_q(\mathbf k)=
+\frac{1}{\sqrt{N_1N_2}}
+\sum_m\sum_n z_{1,m}z_{2,n}
+\exp\!\left(i\mathbf k\cdot(\mathbf r_{2,n}-\mathbf r_{1,m})\right)
+}
+$$
+
+and the direct isotropic calculation uses:
+
+$$
+{\Huge
+S_q(k)=
+\frac{1}{\sqrt{N_1N_2}}
+\sum_m\sum_n z_{1,m}z_{2,n}
+\frac{\sin(k|\mathbf r_{2,n}-\mathbf r_{1,m}|)}{k|\mathbf r_{2,n}-\mathbf r_{1,m}|}
+}
+$$
+
+For one-source charge-charge calculations, \(N_1=N_2=N_q\), so the prefactor is \(1/N_q\). Zero-charge sites are removed before accumulation. The per-mode `Exclude self-pairs` checkbox omits same-site terms when both sides refer to the same charge source. The file-based charge-charge outputs are averaged over processed frames.
+
 ## Output and Workflow Notes
 
 Generated scripts may also write per-trajectory reports, status logs, and cutoff dipole-count files depending on the selected module. Static-structure-factor auxiliary outputs are listed in [Density-Tab Auxiliary Files](Manual.md#density-tab-auxiliary-files) and [Charge-Dipole Auxiliary Files](Manual.md#charge-dipole-auxiliary-files). The GUI remains a workflow generator: the expensive calculations run later when the generated scripts are executed; see [Final notes](Manual.md#final-notes).
