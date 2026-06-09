@@ -268,7 +268,9 @@ This Extra module generates workflows for radial distribution functions, `g(r)`,
 Current behavior highlights:
 
 - `Selection 1` and `Selection 2` use zero-based particle indices
-- empty selections mean all particles in the input coordinate files
+- `Selection 1` and `Selection 2` can use separate `Coordinate Path 1` and `Coordinate path 2` inputs
+- coordinate inputs support Python slicing such as `[::10]`, `[100:1000:10]`, and `[100:1000:10, 50:900:5]`
+- empty selections mean all particles after coordinate slicing
 - `Exclude Self-Pairs` can remove self distances when selections overlap
 - `Density-Normalize` can be unchecked to report a local radial number-density profile instead of a bulk-density-normalized RDF
 - multiple coordinate files can be accumulated into one total RDF

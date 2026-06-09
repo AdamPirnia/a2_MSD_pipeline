@@ -245,7 +245,7 @@ When enabled, the finite-size correction is applied after the raw diffusion esti
 
 The RDF workflow is described in [Extra Module: Radial Distribution Function](Manual.md#extra-module-radial-distribution-function), [RDF Fields](Manual.md#rdf-fields), and [RDF Output](Manual.md#rdf-output).
 
-For two zero-based selections $A$ and $B$, the software accumulates minimum-image pair distances between particles in `Selection 1` and particles in `Selection 2`. Empty selections mean all particles. The selected particle counts are:
+For two zero-based selections $A$ and $B$, the software accumulates minimum-image pair distances between particles in `Selection 1` from `Coordinate Path 1` and particles in `Selection 2` from `Coordinate path 2`. If `Coordinate path 2` is empty, it reuses `Coordinate Path 1`. Empty selections mean all particles after any coordinate slicing. The selected particle counts are:
 
 $$
 {\Huge
@@ -269,7 +269,7 @@ d_{ab}(t)=|\Delta \mathbf r_{ab}(t)|
 }
 $$
 
-where $a\in A$, $b\in B$, and $\mathbf L=(L_x,L_y,L_z)$. With `Exclude Self-Pairs` enabled, pairs with the same zero-based particle index are omitted:
+where $a\in A$, $b\in B$, and $\mathbf L=(L_x,L_y,L_z)$. When both selections are taken from the same coordinate source with the same slicing expression, enabling `Exclude Self-Pairs` omits pairs with the same zero-based particle index:
 
 $$
 {\Huge
@@ -278,7 +278,7 @@ $$
 }
 $$
 
-Without `Exclude Self-Pairs`, the pair set is simply $A\times B$. For bin edges $r_i=i\Delta r$, the reported radius is the bin center:
+Without `Exclude Self-Pairs`, or when the two coordinate sources/slices differ, the pair set is simply $A\times B$. For bin edges $r_i=i\Delta r$, the reported radius is the bin center:
 
 $$
 {\Huge
@@ -358,7 +358,7 @@ V=L_xL_yL_z,
 }
 $$
 
-Here $F_m$ is the number of retained frames from coordinate file $m$ after trajectory selection, stride, and optional desired-length filtering. When `Density-Normalize` is checked, $y(r)=g(r)$, the usual dimensionless RDF. When it is unchecked, $y(r)$ is a shell-volume-normalized radial number-density profile around Selection 1, with units of inverse volume.
+Here $F_m$ is the number of retained frames from coordinate file $m$ after coordinate slicing, trajectory selection, and optional desired-length filtering. When `Density-Normalize` is checked, $y(r)=g(r)$, the usual dimensionless RDF. When it is unchecked, $y(r)$ is a shell-volume-normalized radial number-density profile around Selection 1, with units of inverse volume.
 
 The running coordination number is:
 

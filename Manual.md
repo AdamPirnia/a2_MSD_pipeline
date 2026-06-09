@@ -1374,8 +1374,10 @@ The `Radial Distribution Function` module generates scripts for computing `g(r)`
 
 ## RDF Fields
 
-- `Coordinate Path`: coordinate-file pattern. Text inputs may be flattened as `x1 y1 z1 x2 y2 z2 ...`; binary inputs may also use shape `(frames, particles, 3)`.
-- `stride`: frame stride applied before RDF calculation
+- `Coordinate Path 1`: coordinate-file pattern for `Selection 1`. Text inputs may be flattened as `x1 y1 z1 x2 y2 z2 ...`; binary inputs may also use shape `(frames, particles, 3)`.
+- `slicing` beside `Coordinate Path 1`: Python slicing applied after loading Coordinate Path 1 as `(frames, particles, 3)`. Empty means all frames and particles.
+- `Coordinate path 2`: optional coordinate-file pattern for `Selection 2`. Leave empty to reuse `Coordinate Path 1`.
+- `slicing` beside `Coordinate path 2`: Python slicing applied after loading Coordinate Path 2. Leave empty to reuse the `Coordinate Path 1` slicing.
 - `Output Path`: main RDF output file
 - `Cell Dimensions`: one cubic length or three dimensions `Lx Ly Lz`; used for orthorhombic minimum-image distances
 - `r Max`: optional maximum RDF distance. If empty, the calculation uses half of the smallest cell dimension.
@@ -1386,9 +1388,22 @@ The `Radial Distribution Function` module generates scripts for computing `g(r)`
 - `Chunk Size 2`: number of Selection 2 particles processed at once during pair-distance calculation
 - `Selection 1`: optional zero-based particle-index subset for RDF centers. Empty means all particles.
 - `Selection 2`: optional zero-based particle-index subset for RDF partners. Empty means all particles.
-- `Exclude Self-Pairs`: excludes pairs where Selection 1 and Selection 2 refer to the same zero-based particle index
+- `Exclude Self-Pairs`: excludes pairs where Selection 1 and Selection 2 refer to the same zero-based particle index. It is applied when both coordinate paths and slicing expressions refer to the same coordinate source; with different coordinate sources or different slicing expressions, the software keeps all cross-source pairs.
 - `Trajectory desired length`: optional field; a single integer uses the first `N` frames from each file; `range(start, stop[, step])` uses zero-based frame indices
 - `Trajectory Selection`: optional zero-based subset of coordinate-file indices
+
+RDF coordinate slicing uses the axis order `[frames, particles, xyz]`. Common examples:
+
+- `[::10]`: use every tenth frame and all particles
+- `[100:1000:10]`: use frames `100` through `999`, every tenth frame, and all particles
+- `[:, 0:130]`: use all frames and particles `0` through `129`
+- `[::1, ::4]`: use every frame and every fourth particle
+- `[100:1000:10, 50:900:5]`: use a frame slice and a particle slice in one expression
+- `[:, 67:68]`: keep only particle `67` while preserving the required particle axis
+
+The preferred multi-axis syntax uses one bracket pair, such as `[::1, ::4]`. The RDF parser also accepts shorthand forms such as `[::1],[::4]` and `[[::1],[::4]]`; both are treated as `[::1, ::4]`.
+
+Use slice ranges for particle subsetting in the `slicing` fields. A direct integer particle index such as `[:, 67]` collapses the particle axis and is rejected; use `[:, 67:68]` instead.
 
 `Selection 1`, `Selection 2`, and `Trajectory Selection` support comma lists, inclusive dash ranges, Python lists, and `range(...)`, such as `0,3,5`, `0-10`, `[0, 2, 4]`, and `range(0, 10)`.
 
