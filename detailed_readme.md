@@ -325,15 +325,15 @@ and the shell volume is still $\Delta V_i=(4\pi/3)(r_{i+1}^3-r_i^3)$ for both RD
 
 The RDF module writes two output files from the requested output path. The `_norm` file includes the Selection 2 number density in the denominator, and the `_notNorm` file omits it:
 
-$$
+```math
 {\Huge
 f_{\rho}=
 \begin{cases}
-\rho_B, & \text{for the \_norm file}\\
-1, & \text{for the \_notNorm file}
+\rho_B, & \text{for the }\mathtt{\_norm}\text{ file} \\
+1, & \text{for the }\mathtt{\_notNorm}\text{ file}
 \end{cases}
 }
-$$
+```
 
 The radial profile reported in column 2 is then:
 
