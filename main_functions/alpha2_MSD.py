@@ -332,6 +332,8 @@ def a2_MSD(
             output_io_spec,
             default_mode="text",
             default_precision="double",
+            column_names=("msd",),
+            result_format=True,
         )
         save_numeric_array(
             alpha2_file,
@@ -339,6 +341,8 @@ def a2_MSD(
             output_io_spec,
             default_mode="text",
             default_precision="double",
+            column_names=("alpha2",),
+            result_format=True,
         )
         
         print(f"✓ Results saved:")

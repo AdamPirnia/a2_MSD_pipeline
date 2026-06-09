@@ -307,10 +307,10 @@ def alpha_xz(baseDir, input_pattern, output_pattern, num_dcd, partcl_num, numFra
         print(f"Saving α_yz(t) results to: {alpha_yz_file}")
         print(f"Saving anisotropy results to: {alpha_anisotropy_file}")
         
-        save_numeric_array(alpha_xz_file, alpha_xz, output_io_spec, default_mode="text", default_precision="double")
-        save_numeric_array(alpha_xy_file, alpha_xy, output_io_spec, default_mode="text", default_precision="double")
-        save_numeric_array(alpha_yz_file, alpha_yz, output_io_spec, default_mode="text", default_precision="double")
-        save_numeric_array(alpha_anisotropy_file, anisotropy, output_io_spec, default_mode="text", default_precision="double")
+        save_numeric_array(alpha_xz_file, alpha_xz, output_io_spec, default_mode="text", default_precision="double", column_names=("alpha_xz",), result_format=True)
+        save_numeric_array(alpha_xy_file, alpha_xy, output_io_spec, default_mode="text", default_precision="double", column_names=("alpha_xy",), result_format=True)
+        save_numeric_array(alpha_yz_file, alpha_yz, output_io_spec, default_mode="text", default_precision="double", column_names=("alpha_yz",), result_format=True)
+        save_numeric_array(alpha_anisotropy_file, anisotropy, output_io_spec, default_mode="text", default_precision="double", column_names=("anisotropy",), result_format=True)
         
         print(f"✓ Results saved:")
         print(f"  α_xz(t): {alpha_xz_file}, α_xy(t): {alpha_xy_file}, α_yz(t): {alpha_yz_file}, anisotropy: {alpha_anisotropy_file}")

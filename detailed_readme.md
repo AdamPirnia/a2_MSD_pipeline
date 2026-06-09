@@ -321,16 +321,16 @@ r_i^{\mathrm{center}} =
 }
 $$
 
-and the shell volume is still $\Delta V_i=(4\pi/3)(r_{i+1}^3-r_i^3)$ whether `Density-Normalize` is checked or unchecked.
+and the shell volume is still $\Delta V_i=(4\pi/3)(r_{i+1}^3-r_i^3)$ for both RDF output files.
 
-`Density-Normalize` controls whether the Selection 2 number density is included in the denominator:
+The RDF module writes two output files from the requested output path. The `_norm` file includes the Selection 2 number density in the denominator, and the `_notNorm` file omits it:
 
 $$
 {\Huge
 f_{\rho}=
 \begin{cases}
-\rho_B, & \text{Density-Normalize checked}\\
-1, & \text{Density-Normalize unchecked}
+\rho_B, & \text{for the \_norm file}\\
+1, & \text{for the \_notNorm file}
 \end{cases}
 }
 $$
@@ -358,7 +358,7 @@ V=L_xL_yL_z,
 }
 $$
 
-Here $F_m$ is the number of retained frames from coordinate file $m$ after coordinate slicing, trajectory selection, and optional desired-length filtering. When `Density-Normalize` is checked, $y(r)=g(r)$, the usual dimensionless RDF. When it is unchecked, $y(r)$ is a shell-volume-normalized radial number-density profile around Selection 1, with units of inverse volume.
+Here $F_m$ is the number of retained frames from coordinate file $m$ after coordinate slicing, trajectory selection, and optional desired-length filtering. In the `_norm` file, $y(r)=g(r)$, the usual dimensionless RDF. In the `_notNorm` file, $y(r)$ is a shell-volume-normalized radial number-density profile around Selection 1, with units of inverse volume.
 
 The running coordination number is:
 

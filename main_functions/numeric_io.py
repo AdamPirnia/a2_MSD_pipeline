@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -93,10 +93,77 @@ def text_format_for_spec(spec: dict[str, Any]) -> str:
     return f"%.{decimals}f"
 
 
+def decimals_for_spec(spec: dict[str, Any]) -> int:
+    precision = str(spec["precision"])
+    if precision == "single":
+        return DEFAULT_SINGLE_DECIMALS
+    if precision == "double":
+        return DEFAULT_DOUBLE_DECIMALS
+    return int(spec["decimals"])
+
+
 def _round_if_needed(data: np.ndarray, spec: dict[str, Any]) -> np.ndarray:
     if str(spec["precision"]) == "custom":
         return np.round(np.asarray(data, dtype=np.float64), int(spec["decimals"]))
     return data
+
+
+def _format_fixed_width_value(value: Any, decimals: int, *, compact: bool) -> str:
+    number = float(value)
+    if not np.isfinite(number):
+        return str(number)
+    text = f"{number:.{decimals}f}"
+    if compact:
+        text = text.rstrip("0").rstrip(".")
+        if text in {"", "-0"}:
+            text = "0"
+    return text
+
+
+def _write_fixed_width_text_array(
+    output_file: str,
+    array: np.ndarray,
+    *,
+    decimals: int,
+    header: str | None = None,
+    column_names: Sequence[str] | None = None,
+    compact_columns: Sequence[int] | None = None,
+) -> None:
+    data = np.asarray(array)
+    if data.ndim == 0:
+        data = data.reshape(1, 1)
+    elif data.ndim == 1:
+        data = data.reshape(-1, 1)
+    elif data.ndim > 2:
+        data = data.reshape(data.shape[0], -1)
+
+    compact_set = {int(index) for index in (compact_columns or [])}
+    rows: list[list[str]] = []
+    for row in data:
+        rows.append(
+            [
+                _format_fixed_width_value(value, decimals, compact=column_index in compact_set)
+                for column_index, value in enumerate(row)
+            ]
+        )
+
+    column_count = int(data.shape[1]) if data.ndim == 2 else 1
+    names = [str(name) for name in (column_names or [])]
+    if len(names) < column_count:
+        names.extend(f"col_{index + 1}" for index in range(len(names), column_count))
+    names = names[:column_count]
+    widths = [len(names[index]) for index in range(column_count)]
+    for row in rows:
+        for index, text in enumerate(row):
+            widths[index] = max(widths[index], len(text))
+
+    with open(output_file, "w", encoding="utf-8") as handle:
+        if header:
+            for line in str(header).splitlines():
+                handle.write(f"# {line}\n")
+        handle.write("# " + " ".join(f"{names[index]:>{widths[index]}}" for index in range(column_count)) + "\n")
+        for row in rows:
+            handle.write(" ".join(f"{row[index]:>{widths[index]}}" for index in range(column_count)) + "\n")
 
 
 def load_numeric_array(
@@ -146,6 +213,9 @@ def save_numeric_array(
     default_decimals: int | None = None,
     delimiter: str = " ",
     header: str | None = None,
+    column_names: Sequence[str] | None = None,
+    compact_columns: Sequence[int] | None = None,
+    result_format: bool = False,
 ) -> dict[str, Any]:
     io_spec = normalize_io_spec(
         spec,
@@ -161,6 +231,15 @@ def save_numeric_array(
     if io_spec["mode"] == "binary":
         with open(output_file, "wb") as fh:
             np.save(fh, array, allow_pickle=False)
+    elif result_format or column_names is not None:
+        _write_fixed_width_text_array(
+            output_file,
+            array,
+            decimals=decimals_for_spec(io_spec),
+            header=header,
+            column_names=column_names,
+            compact_columns=compact_columns,
+        )
     else:
         np.savetxt(
             output_file,

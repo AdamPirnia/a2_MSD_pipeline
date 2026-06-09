@@ -1382,7 +1382,6 @@ The `Radial Distribution Function` module generates scripts for computing `g(r)`
 - `Cell Dimensions`: one cubic length or three dimensions `Lx Ly Lz`; used for orthorhombic minimum-image distances
 - `r Max`: optional maximum RDF distance. If empty, the calculation uses half of the smallest cell dimension.
 - `Bin Width`: RDF radial bin width. It may use a numeric common-term placeholder, for example `**` with Common Term 2 values `1, 2`.
-- `Density-Normalize`: includes Selection 2 density in the RDF denominator. If unchecked, column 2 is a shell-volume-normalized radial number-density profile around Selection 1 instead of a bulk-density-normalized RDF.
 - `Chunkify`: enables the chunk-size fields. If unchecked, both chunk sizes are treated as `1`.
 - `Chunk Size 1`: number of Selection 1 particles processed at once during pair-distance calculation
 - `Chunk Size 2`: number of Selection 2 particles processed at once during pair-distance calculation
@@ -1409,12 +1408,19 @@ Use slice ranges for particle subsetting in the `slicing` fields. A direct integ
 
 ## RDF Output
 
-The RDF output has four columns:
+The requested `Output Path` produces two RDF files:
+
+- `_norm`: density-normalized RDF output
+- `_notNorm`: shell-volume-normalized radial number-density output without Selection 2 density in the denominator
+
+Each RDF output has four columns:
 
 - column 1: radial bin center `r`
-- column 2: radial distribution function `g(r)` when `Density-Normalize` is checked; radial number-density profile when unchecked
-- column 3: running coordination number
+- column 2: `g_r` in the `_norm` file; `radial_number_density` in the `_notNorm` file
+- column 3: running coordination number, computed consistently from the non-density-normalized shell profile
 - column 4: `hist`, the raw pair-count histogram before RDF normalization
+
+Text analysis outputs include commented column headers and fixed-width columns so they remain compatible with `numpy.loadtxt`.
 
 ## Final notes
 

@@ -272,15 +272,16 @@ Current behavior highlights:
 - coordinate inputs support Python slicing such as `[::10]`, `[100:1000:10]`, and `[100:1000:10, 50:900:5]`
 - empty selections mean all particles after coordinate slicing
 - `Exclude Self-Pairs` can remove self distances when selections overlap
-- `Density-Normalize` can be unchecked to report a local radial number-density profile instead of a bulk-density-normalized RDF
 - multiple coordinate files can be accumulated into one total RDF
 - `Chunkify` exposes `Chunk Size 1` and `Chunk Size 2` for pair-distance chunking
 - Smart Optimization can recommend workers, chunk sizes, and SLURM resources
+- text analysis outputs use commented column headers and fixed-width aligned columns
 
 Typical outputs:
 
 - radial bin center `r`
-- radial distribution function `g(r)`, or radial number density when `Density-Normalize` is unchecked
+- radial distribution function `g(r)` in the `_norm` RDF file
+- radial number-density profile in the `_notNorm` RDF file
 - running coordination number
 - raw pair-count histogram `hist`
 

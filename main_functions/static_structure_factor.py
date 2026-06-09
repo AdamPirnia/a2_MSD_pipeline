@@ -3140,6 +3140,9 @@ def compute_charge_dipole_structure_factor_from_files(
             _CHARGE_DIPOLE_DIPOLE_NORMALIZATION_HEADER,
             "Frame/trajectory normalization: none",
         )),
+        column_names=("k", "Sqp_real", "Sqp_imag", "shell_count"),
+        compact_columns=(0, 3),
+        result_format=True,
     )
     save_numeric_array(
         directional_output_path,
@@ -3151,6 +3154,9 @@ def compute_charge_dipole_structure_factor_from_files(
             _CHARGE_DIPOLE_DIPOLE_NORMALIZATION_HEADER,
             "Frame/trajectory normalization: none",
         )),
+        column_names=("kx", "ky", "kz", "k", "Sqp_real", "Sqp_imag"),
+        compact_columns=(0, 1, 2, 3),
+        result_format=True,
     )
     overall_elapsed = time.time() - overall_start
     print(f"\nSaved isotropic charge-dipole output: {isotropic_output_path}", flush=True)
@@ -3967,6 +3973,9 @@ def compute_charge_dipole_structure_factor_isotropic_from_files(
         default_mode="text",
         default_precision="double",
         header=output_header,
+        column_names=("k", "Sqp", "cutoff_count_1", "cutoff_count_2", "cutoff_count_3"),
+        compact_columns=(0, 2, 3, 4),
+        result_format=True,
     )
 
     overall_elapsed = time.time() - overall_start
@@ -4421,6 +4430,9 @@ def compute_static_structure_factor_from_files(
         output_io_spec,
         default_mode="text",
         default_precision="double",
+        column_names=("k", "S_k"),
+        compact_columns=(0,),
+        result_format=True,
     )
 
     overall_elapsed = time.time() - overall_start
@@ -4682,6 +4694,9 @@ def compute_directional_structure_factor_from_files(
         output_io_spec,
         default_mode="text",
         default_precision="double",
+        column_names=("kx", "ky", "kz", "k", "S_k"),
+        compact_columns=(0, 1, 2, 3),
+        result_format=True,
     )
 
     overall_elapsed = time.time() - overall_start
@@ -4921,6 +4936,9 @@ def compute_k_component_structure_factors_from_files(
             output_io_spec,
             default_mode="text",
             default_precision="double",
+            column_names=("k_component", "S_k"),
+            compact_columns=(0,),
+            result_format=True,
         )
         print(f"\nSaved component S(k) output ({label}): {resolved_output_file}", flush=True)
         print(f"reused files ({label}): {stats['reused_count']}", flush=True)

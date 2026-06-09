@@ -125,6 +125,11 @@ def _slice_from_stride(value: Any) -> str:
     return f"[::{stride}]"
 
 
+def _path_with_suffix(path: str, suffix: str) -> str:
+    root, extension = os.path.splitext(path)
+    return f"{root}{suffix}{extension}" if extension else f"{path}{suffix}"
+
+
 def _slice_int_value(node: ast.AST) -> int | None:
     if isinstance(node, ast.Constant):
         if node.value is None:
@@ -509,50 +514,88 @@ def compute_radial_distribution_function_from_files(
     n_selection1 = n_selection1_values.pop()
     n_selection2 = n_selection2_values.pop()
     rho2 = float(n_selection2) / volume
-    density_factor = rho2 if bool(density_normalize) else 1.0
-    normalization = float(total_frames) * float(n_selection1) * density_factor * shell_volumes
-    g_r = np.divide(hist, normalization, out=np.zeros_like(hist, dtype=np.float64), where=normalization != 0.0)
-    coordination_number = np.cumsum(g_r * shell_volumes * density_factor)
+    base_normalization = float(total_frames) * float(n_selection1) * shell_volumes
+    radial_number_density = np.divide(
+        hist,
+        base_normalization,
+        out=np.zeros_like(hist, dtype=np.float64),
+        where=base_normalization != 0.0,
+    )
+    density_normalization = base_normalization * rho2
+    g_r = np.divide(
+        hist,
+        density_normalization,
+        out=np.zeros_like(hist, dtype=np.float64),
+        where=density_normalization != 0.0,
+    )
+    coordination_number = np.cumsum(radial_number_density * shell_volumes)
 
     output_file = os.path.join(baseDir, expand_path_pattern(output_path, common_term, None))
-    output_data = np.column_stack((r, g_r, coordination_number, hist))
-    column2_label = "g(r)" if bool(density_normalize) else "radial_number_density"
-    header = "\n".join(
+    norm_output_file = _path_with_suffix(output_file, "_norm")
+    not_norm_output_file = _path_with_suffix(output_file, "_notNorm")
+    common_header_lines = [
+        "Radial Distribution Function",
+        f"input_pattern1: {input_pattern1}",
+        f"input_pattern2: {input_pattern2 or input_pattern1}",
+        f"coords_slice1: {coords_slice1 or '[:]'}",
+        f"coords_slice2: {coords_slice2 or coords_slice1 or '[:]'}",
+        f"num_trajectories: {num_trajectories}",
+        f"trajectory_indices: {trajectory_indices}",
+        f"total_frames: {total_frames}",
+        f"box: {box_array.tolist()}",
+        f"selection1: {selection1 if str(selection1).strip() else 'all'}",
+        f"selection2: {selection2 if str(selection2).strip() else 'all'}",
+        f"exclude_self_pairs: {bool(exclude_self_pairs)}",
+        f"selection1_block_size: {selection1_block_size if selection1_block_size is not None else 1}",
+        f"selection2_block_size: {selection2_block_size if selection2_block_size is not None else 1}",
+        f"dr: {dr}",
+        f"r_max: {resolved_r_max}",
+        f"rho_selection2: {rho2:.15g}",
+        "hist is the raw pair-count histogram before RDF normalization.",
+    ]
+    norm_header = "\n".join(
         [
-            "Radial Distribution Function",
-            f"columns: r {column2_label} coordination_number hist",
-            f"input_pattern1: {input_pattern1}",
-            f"input_pattern2: {input_pattern2 or input_pattern1}",
-            f"coords_slice1: {coords_slice1 or '[:]'}",
-            f"coords_slice2: {coords_slice2 or coords_slice1 or '[:]'}",
-            f"num_trajectories: {num_trajectories}",
-            f"trajectory_indices: {trajectory_indices}",
-            f"total_frames: {total_frames}",
-            f"box: {box_array.tolist()}",
-            f"selection1: {selection1 if str(selection1).strip() else 'all'}",
-            f"selection2: {selection2 if str(selection2).strip() else 'all'}",
-            f"exclude_self_pairs: {bool(exclude_self_pairs)}",
-            f"selection1_block_size: {selection1_block_size if selection1_block_size is not None else 1}",
-            f"selection2_block_size: {selection2_block_size if selection2_block_size is not None else 1}",
-            f"density_normalize: {bool(density_normalize)}",
-            f"dr: {dr}",
-            f"r_max: {resolved_r_max}",
-            f"rho_selection2: {rho2:.15g}",
-            "hist is the raw pair-count histogram before RDF normalization.",
-            "When density_normalize is False, column 2 is shell-volume-normalized radial number density around Selection 1.",
+            *common_header_lines,
+            "density_normalized: True",
+            "columns: r g_r coordination_number hist",
         ]
     )
+    not_norm_header = "\n".join(
+        [
+            *common_header_lines,
+            "density_normalized: False",
+            "columns: r radial_number_density coordination_number hist",
+        ]
+    )
+    norm_output_data = np.column_stack((r, g_r, coordination_number, hist))
+    not_norm_output_data = np.column_stack((r, radial_number_density, coordination_number, hist))
     save_numeric_array(
-        output_file,
-        output_data,
+        norm_output_file,
+        norm_output_data,
         output_io_spec,
         default_mode="text",
         default_precision="double",
-        header=header,
+        header=norm_header,
+        column_names=("r", "g_r", "coordination_number", "hist"),
+        compact_columns=(3,),
+        result_format=True,
+    )
+    save_numeric_array(
+        not_norm_output_file,
+        not_norm_output_data,
+        output_io_spec,
+        default_mode="text",
+        default_precision="double",
+        header=not_norm_header,
+        column_names=("r", "radial_number_density", "coordination_number", "hist"),
+        compact_columns=(3,),
+        result_format=True,
     )
 
     return {
-        "output_file": output_file,
+        "output_file": norm_output_file,
+        "output_file_norm": norm_output_file,
+        "output_file_not_norm": not_norm_output_file,
         "total_frames": total_frames,
         "n_files": len(ordered_results),
         "n_particles": n_particles1_values.copy().pop(),
@@ -561,8 +604,8 @@ def compute_radial_distribution_function_from_files(
         "n_selection1": n_selection1,
         "n_selection2": n_selection2,
         "rho_selection2": rho2,
-        "density_normalize": bool(density_normalize),
-        "column2_label": column2_label,
+        "density_normalize": True,
+        "column2_label": "g(r)",
         "r_max": resolved_r_max,
         "dr": dr,
         "hist_sum": float(np.sum(hist)),

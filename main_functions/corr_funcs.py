@@ -411,6 +411,9 @@ def _calculate_correlation_file_task(params: dict[str, Any]) -> dict[str, Any]:
             output_io_spec,
             default_mode="text",
             default_precision="double",
+            column_names=("time", "correlation"),
+            compact_columns=(0,),
+            result_format=True,
         )
         scaled_variance = float(variance) * float(params["coef"]) ** 2
         save_numeric_array(
@@ -419,6 +422,8 @@ def _calculate_correlation_file_task(params: dict[str, Any]) -> dict[str, Any]:
             output_io_spec,
             default_mode="text",
             default_precision="double",
+            column_names=("variance",),
+            result_format=True,
         )
         return {
             "index": index,
