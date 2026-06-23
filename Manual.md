@@ -684,7 +684,7 @@ For a standard coordinate-to-analysis workflow:
 3. Use `MSD and NGP / Anisotropic NGP` on the COM outputs.
 4. Use `Correlation Functions` when you already have numeric scalar or vector arrays and want correlation-analysis scripts for them.
 5. Use `Diffusion constant` when you already have saved VACF files, MSD files, or both, and want diffusion estimates from either route.
-6. Use `Static Structure Factor` when you want isotropic `S(k)` from saved coordinate arrays.
+6. Use `Static Structure Factor` when you want isotropic $S(k)$ from saved coordinate arrays.
 7. Use `Radial Distribution Function` when you want `g(r)` from saved coordinate or COM arrays.
 
 ## Module 5: Diffusion Constant
@@ -904,9 +904,9 @@ This module generates scripts for density structure factors and charge-dipole st
 - `Number of Trajectories`: optional limit on how many discovered trajectory files or file sets are used; leave blank to use all discovered inputs
 - `Max Workers`: maximum worker processes used when structure-factor calculations process multiple trajectory files or charge-dipole file sets
 - `Resume`: when `Use existing per-trajectory outputs` is checked, trajectories whose per-trajectory report files already exist and match the current `k` grid are reused; use this only when rerunning the same inputs/settings after an interrupted job; missing trajectories are computed, and the final total includes both reused and newly computed reports
-- `Smart Optimization`: opens a helper for estimating worker count, chunk sizes, SLURM memory, CPUs, and walltime. It has separate profiles for `S(k)` isotropic, `S(k)` directional, `S(k)` along-k components, and charge-dipole `Sqp(k)`.
+- `Smart Optimization`: opens a helper for estimating worker count, chunk sizes, SLURM memory, CPUs, and walltime. It has separate profiles for $S(k)$ isotropic, $S(k)$ directional, $S(k)$ along-k components, and charge-dipole $S_{qp}(k)$.
 
-The Smart Optimization helper uses the current stride, trajectory-selection, desired-length, cutoff, and k-grid settings. It asks for the values that cannot be reliably inferred from paths alone, such as frames per file, coordinates per frame, charge sites per frame, dipoles per frame, available memory, and CPU workers. For density `S(k)`, it recommends `Frame`, `Coordinate`, and `k` chunk sizes. For charge-dipole `Sqp(k)`, it recommends `Frame`, `Charge`, `Dipole`, and `k` chunk sizes and enables those chunk controls.
+The Smart Optimization helper uses the current stride, trajectory-selection, desired-length, cutoff, and k-grid settings. It asks for the values that cannot be reliably inferred from paths alone, such as frames per file, coordinates per frame, charge sites per frame, dipoles per frame, available memory, and CPU workers. For density $S(k)$, it recommends `Frame`, `Coordinate`, and `k` chunk sizes. For charge-dipole $S_{qp}(k)$, it recommends `Frame`, `Charge`, `Dipole`, and `k` chunk sizes and enables those chunk controls.
 
 ## Density Structure Factor Tab
 
@@ -924,11 +924,11 @@ All three use saved coordinate arrays, not raw DCD files.
 - `Stride`: frame stride applied before the structure-factor calculation; `1` means use every saved frame
 - `Output Path`: final output file written by that calculation
 - `L_x`, `L_y`, `L_z`: orthorhombic box lengths used to build reciprocal-space vectors and to apply minimum-image distances
-- `Shell Width`: positive tolerance used when nearby `|k|` values are grouped together
+- `Shell Width`: positive tolerance used when nearby $|k|$ values are grouped together
 - `CO-1`, `CO-2`, `CO-3`: optional real-space cutoffs applied to the first, second, and third `k` tiers
 - `CS-1`, `CS-2`, `CS-3`: optional cell-list sizes paired with `CO-1`, `CO-2`, and `CO-3`; each cell-size value is used only for the matching cutoff tier
 - `k Max 1`, `k Max 2`, `k Max 3`: upper bounds for the first, second, and third reciprocal-space tiers
-- `Resolution: res. 1`, `res. 2`, `res. 3`: minimum `|k|` spacing kept in the first, second, and third reciprocal-space tiers
+- `Resolution: res. 1`, `res. 2`, `res. 3`: minimum $|k|$ spacing kept in the first, second, and third reciprocal-space tiers
 - `Trajectory desired length`: optional field; a single integer means use the first `N` frames from each file; `range(start, stop[, step])` means use that frame window from each file
 - `Trajectory Selection`: optional zero-based subset of trajectory indices to process from `Number of Trajectories`; supports the same syntax as `DCD Selection`
 - `Chunk Sizes`: opens the dialog for density-structure-factor chunk sizes
@@ -956,7 +956,7 @@ Practical meaning:
 - smaller `k Max`: lower reciprocal-space coverage
 - larger `k Max`: more reciprocal-space coverage and more work
 
-### What `k_x`, `k_y`, and `k_z` Mean
+### What $k_x$, $k_y$, and $k_z$ Mean
 
 The directional and component-based calculations use explicit reciprocal-space vectors
 
@@ -976,45 +976,45 @@ where the generated density-tab vectors use non-negative integers `n_x`, `n_y`, 
 
 So:
 
-- `k_x`, `k_y`, `k_z` are the Cartesian components of the sampled reciprocal-space vector
-- `|k| = sqrt(k_x^2 + k_y^2 + k_z^2)` is its magnitude
-- `L_x`, `L_y`, `L_z` set the spacing of allowed reciprocal-space values along each box direction
+- $k_x$, $k_y$, $k_z$ are the Cartesian components of the sampled reciprocal-space vector
+- $|k| = \sqrt{k_x^2 + k_y^2 + k_z^2}$ is its magnitude
+- $L_x$, $L_y$, $L_z$ set the spacing of allowed reciprocal-space values along each box direction
 
 ### Isotropic
 
-This calculation averages the density structure factor over unique `|k|` values.
+This calculation averages the density structure factor over unique $|k|$ values.
 
-How the `k` list is built:
+How the $k$ list is built:
 
 - candidate reciprocal-space magnitudes are generated from the box lengths and the three `k Max` tiers
 - nearby magnitudes are merged using `Shell Width`
-- the final isotropic table is written as one row per unique `|k|`
+- the final isotropic table is written as one row per unique $|k|$
 
 Main output format:
 
-- column 1: `|k|`
-- column 2: `S(k)`
+- column 1: $|k|$
+- column 2: $S(k)$
 
 Notes:
 
-- this mode produces an isotropic average, so the output does not preserve the original `k_x`, `k_y`, `k_z` direction of each reciprocal vector
-- `CO-1`, `CO-2`, and `CO-3` apply to pair distances in real space for the matching `k` tier
+- this mode produces an isotropic average, so the output does not preserve the original $k_x$, $k_y$, $k_z$ direction of each reciprocal vector
+- `CO-1`, `CO-2`, and `CO-3` apply to pair distances in real space for the matching $k$ tier
 
 ### Directional
 
-This calculation keeps each sampled reciprocal vector explicitly instead of collapsing everything to `|k|`.
+This calculation keeps each sampled reciprocal vector explicitly instead of collapsing everything to $|k|$.
 
 Main output format:
 
-- column 1: `k_x`
-- column 2: `k_y`
-- column 3: `k_z`
-- column 4: `|k|`
-- column 5: `S(k)`
+- column 1: $k_x$
+- column 2: $k_y$
+- column 3: $k_z$
+- column 4: $|k|$
+- column 5: $S(k)$
 
-Use this when you want anisotropic information, for example to distinguish different reciprocal-space directions that have the same `|k|`.
+Use this when you want anisotropic information, for example to distinguish different reciprocal-space directions that have the same $|k|$.
 
-In the current implementation, the directional output keeps every sampled `k` vector as its own row, so `Shell Width` does not merge rows in this mode.
+In the current implementation, the directional output keeps every sampled $k$ vector as its own row, so `Shell Width` does not merge rows in this mode.
 
 ### Along `k` Components
 
@@ -1026,13 +1026,13 @@ Field:
 
 How selections are interpreted:
 
-- `x`: only the `x` direction is active, so vectors are of the form `(k_x, 0, 0)` with `k_x > 0`
-- `y`: vectors are `(0, k_y, 0)` with `k_y > 0`
-- `z`: vectors are `(0, 0, k_z)` with `k_z > 0`
-- `x+y`: vectors are `(k_x, k_y, 0)` with `k_x` and `k_y` sampled and `k_z = 0`
-- `x+z`: vectors are `(k_x, 0, k_z)`
-- `y+z`: vectors are `(0, k_y, k_z)`
-- `x+y+z`: vectors are `(k_x, k_y, k_z)`
+- `x`: only the $x$ direction is active, so vectors are of the form $(k_x, 0, 0)$ with $k_x > 0$
+- `y`: vectors are $(0, k_y, 0)$ with $k_y > 0$
+- `z`: vectors are $(0, 0, k_z)$ with $k_z > 0$
+- `x+y`: vectors are $(k_x, k_y, 0)$ with $k_x$ and $k_y$ sampled and $k_z = 0$
+- `x+z`: vectors are $(k_x, 0, k_z)$
+- `y+z`: vectors are $(0, k_y, k_z)$
+- `x+y+z`: vectors are $(k_x, k_y, k_z)$
 
 Important meaning:
 
@@ -1047,13 +1047,13 @@ Output naming:
 
 Output format for one-axis selections:
 
-- column 1: `|k_x|`, `|k_y|`, or `|k_z|` for the selected axis
-- column 2: `S(k)`
+- column 1: $|k_x|$, $|k_y|$, or $|k_z|$ for the selected axis
+- column 2: $S(k)$
 
 Output format for multi-axis selections such as `x+y`, `x+z`, `y+z`, and `x+y+z`:
 
-- column 1: shell-averaged `|k|`
-- column 2: shell-averaged `S(k)`
+- column 1: shell-averaged $|k|$
+- column 2: shell-averaged $S(k)$
 
 In other words:
 
@@ -1082,15 +1082,15 @@ The charge-coordinate, dipole-position, and dipole-vector patterns must resolve 
 
 The charge-values file is normally a constant-charge table. If the file has more than one column, the calculation uses the last column as the charge value. For two-column files, the first column may be a charge-site index for human bookkeeping, but it is not used to reorder coordinates; charge rows are expected to match the charge-coordinate site order. If optional `Mask Charge Index/Indices` is set, those charge values are set to `0.0` before nonzero-charge filtering.
 
-Charge sites with charge exactly `0.0` are ignored before the charge-dipole calculation starts. This means they do not contribute to `Sqp(k)`, and they also do not define cutoff neighborhoods. With a cutoff enabled, only dipoles within the cutoff distance of nonzero charge sites are included.
+Charge sites with charge exactly `0.0` are ignored before the charge-dipole calculation starts. This means they do not contribute to $S_{qp}(k)$, and they also do not define cutoff neighborhoods. With a cutoff enabled, only dipoles within the cutoff distance of nonzero charge sites are included.
 
-For generated file-based workflows, the charge-dipole sums below are evaluated frame by frame and divided by the number of contributing dipoles in that frame before the frame contribution is added to the accumulated output. With no cutoff, this denominator is the number of valid dipoles after optional dipole-magnitude masking. With a cutoff, it is the number of unique valid dipoles inside the cutoff neighborhood of the nonzero charge sites for that frame and `k` tier.
+In the formulas below, $N_m(f)$ is the number of contributing dipoles for frame $f$: without a cutoff it equals the number of valid dipoles after optional magnitude masking; with a cutoff it is the number of unique valid dipoles inside the cutoff neighborhood of the nonzero charge sites for that frame and $k$ tier. Frame contributions are accumulated across all processed frames and trajectory files without dividing by frame or trajectory count.
 
 ### Charge-Dipole Fields
 
 - `Isotropic`: when checked, generates the direct isotropic charge-dipole output
 - `Directional`: when checked, generates the directional charge-dipole output
-- `Small k approx`: when checked, uses the first-order small-`k` approximation for the enabled charge-dipole sections
+- `Small k approx`: when checked, uses the first-order small-$k$ approximation for the enabled charge-dipole sections
 - `Charge Values Path`: file containing the charge values; if multiple columns are present, the last column is used
 - `Charge Coordinates Path`: coordinate pattern for charge positions
 - `Charge Coordinates Stride`: frame stride for the charge-coordinate input
@@ -1112,8 +1112,8 @@ The charge-dipole tab uses the same three `k`-resolution tiers in both direction
 
 - `Cell 1`, `Cell 2`, and `Cell 3` define the orthorhombic cell dimensions used for the first, second, and third `k` tiers.
 - `Cell 1` must contain three positive lengths. If `Cell 2` or `Cell 3` is left empty, it reuses the previous tier's cell dimensions.
-- `Resolution: res. 1`, `res. 2`, `res. 3` are the minimum spacing kept between neighboring `|k|` values within the first, second, and third tiers.
-- Directional mode keeps all reciprocal-vector directions whose `|k|` value survives that tier's resolution filter.
+- `Resolution: res. 1`, `res. 2`, `res. 3` are the minimum spacing kept between neighboring $|k|$ values within the first, second, and third tiers.
+- Directional mode keeps all reciprocal-vector directions whose $|k|$ value survives that tier's resolution filter.
 - The same cell dimensions, `k` tiers, cutoffs, and cell-list settings are used by both full charge-dipole formulas and the `Small k approx` formulas.
 
 For all charge-dipole calculations, the distance vector is defined as:
@@ -1135,42 +1135,44 @@ With `Small k approx` unchecked, the directional charge-dipole structure factor 
 $$
 {\Huge
 S_{qp}(\mathbf k) =
-i\sum_q\sum_p
+i\sum_f\frac{1}{N_m(f)}
+\sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf k}\right)
 \exp\!\left(i\mathbf k\cdot\mathbf r_{q,p}\right)
 }
 $$
 
-With `Small k approx` checked, the first-order small-`k` directional approximation is:
+With `Small k approx` checked, the first-order small-$k$ directional approximation is:
 
 $$
 {\Huge
 S_{qp}(\mathbf k) \simeq
--k\sum_q\sum_p
+-k\sum_f\frac{1}{N_m(f)}
+\sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf k}\right)
 \left(\hat{\mathbf k}\cdot\mathbf r_{q,p}\right)
 }
 $$
 
-The small-`k` directional approximation is real-valued. The output still keeps the same real/imaginary column layout as the full directional calculation; the imaginary column is zero in small-`k` mode.
+The small-$k$ directional approximation is real-valued. The output still keeps the same real/imaginary column layout as the full directional calculation; the imaginary column is zero in small-$k$ mode.
 
 Directional output format:
 
-- column 1: `k_x`
-- column 2: `k_y`
-- column 3: `k_z`
-- column 4: `|k|`
+- column 1: $k_x$
+- column 2: $k_y$
+- column 3: $k_z$
+- column 4: $|k|$
 - column 5: real part of the charge-dipole structure factor
 - column 6: imaginary part of the charge-dipole structure factor
 
-The directional `Sqp(k)` values are normalized during the calculation by the number of contributing dipoles in each processed frame, then accumulated across frames and trajectory files. They are not divided by the number of frames or trajectory files.
+The directional $S_{qp}(k)$ values are normalized during the calculation by the number of contributing dipoles in each processed frame, then accumulated across frames and trajectory files. They are not divided by the number of frames or trajectory files.
 
 Isotropic output format produced from the directional data:
 
-- column 1: shell-averaged `|k|`
+- column 1: shell-averaged $|k|$
 - column 2: real part
 - column 3: imaginary part
-- column 4: number of directional `k` vectors contributing to that shell
+- column 4: number of directional $k$ vectors contributing to that shell
 
 `Shell Width` is required in this mode because it controls that shell average.
 
@@ -1183,18 +1185,20 @@ With `Small k approx` unchecked, the isotropic charge-dipole structure factor is
 $$
 {\Huge
 S_{qp}(k) =
--\sum_q\sum_p
+-\sum_f\frac{1}{N_m(f)}
+\sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf r}_{q,p}\right)
 j_1\!\left(k|\mathbf r_{q,p}|\right)
 }
 $$
 
-With `Small k approx` checked, the first-order small-`k` isotropic approximation is:
+With `Small k approx` checked, the first-order small-$k$ isotropic approximation is:
 
 $$
 {\Huge
 S_{qp}(k) \simeq
 -\frac{k}{3}
+\sum_f\frac{1}{N_m(f)}
 \sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\mathbf r_{q,p}\right)
 }
@@ -1202,8 +1206,8 @@ $$
 
 Output format:
 
-- column 1: `|k|`
-- column 2: charge-dipole structure factor, `Sqp(k)`, normalized during the calculation by the number of contributing dipoles in each processed frame; it is not divided by the number of frames or trajectory files
+- column 1: $|k|$
+- column 2: charge-dipole structure factor, $S_{qp}(k)$, normalized during the calculation by the number of contributing dipoles in each processed frame; it is not divided by the number of frames or trajectory files
 - column 3: average number of dipoles included by `CO-1`
 - column 4: average number of dipoles included by `CO-2`
 - column 5: average number of dipoles included by `CO-3`
@@ -1218,7 +1222,7 @@ In this mode, `Shell Width` is not used by the calculation.
 
 `CS-1`, `CS-2`, and `CS-3` are the matching cell sizes used with those cutoff tiers. If a cutoff is provided and the matching cell size is left empty, the generated workflow falls back to using the cutoff value as the cell size.
 
-Cutoffs are applied to distances between dipole positions and charge-coordinate sites whose charge value is nonzero. Zero-charge coordinate sites are masked out before the neighbor search, so they cannot add nearby dipoles to the cutoff-limited `Sqp(k)`.
+Cutoffs are applied to distances between dipole positions and charge-coordinate sites whose charge value is nonzero. Zero-charge coordinate sites are masked out before the neighbor search, so they cannot add nearby dipoles to the cutoff-limited $S_{qp}(k)$.
 
 When a cutoff is used:
 
@@ -1235,7 +1239,7 @@ The generated scripts may also write:
 
 ## Charge-Charge Structure Factor Tab
 
-This tab computes charge-charge `S_q(k)` from one or two coordinate paths plus one or two charge-value files. If `Coordinate Path 2` is not enabled, the generated workflow reuses `Coordinate Path 1` with the same stride; the `Coordinate Path 2` slicing field remains active and is required, so two selections can still be taken from one coordinate source. If `Charges Path 2` is empty, `Charges Path 1` is reused.
+This tab computes charge-charge $S_q(k)$ from one or two coordinate paths plus one or two charge-value files. If `Coordinate Path 2` is not enabled, the generated workflow reuses `Coordinate Path 1` with the same stride; the `Coordinate Path 2` slicing field remains active and is required, so two selections can still be taken from one coordinate source. If `Charges Path 2` is empty, `Charges Path 1` is reused.
 
 The charge files use the same charge-value convention as charge-dipole workflows: if a file has multiple columns, the last column is used as the charge value. Zero-charge sites are removed before accumulation.
 
@@ -1249,8 +1253,8 @@ The charge files use the same charge-value convention as charge-dipole workflows
 - `Coordinate Path 2 slicing`: required RDF-style Python slicing for the second side; it remains active even when `Coordinate Path 2` is disabled
 - `Charges Path 1`: first charge-values file
 - `Charges Path 2`: optional second charge-values file; blank reuses `Charges Path 1`
-- `Isotropic`: enables direct isotropic `S_q(k)` output
-- `Directional`: enables directional `S_q(k)` output
+- `Isotropic`: enables direct isotropic $S_q(k)$ output
+- `Directional`: enables directional $S_q(k)$ output
 - `Exclude self-pairs`: per-mode checkbox that omits same-site `m=n` terms when both sides refer to the same charge source
 - `Cell Dimensions`, `Wave Vectors`, `Cutoffs`, and `Trajectory desired length`: same three-tier controls used by the charge-dipole tab
 
@@ -1276,7 +1280,7 @@ S_q(k)=
 }
 $$
 
-For same-source calculations, `N_1=N_2=N_q`, so the normalization reduces to the requested `1/N_q` form. The outputs are averaged over processed frames.
+For same-source calculations, $N_1=N_2=N_q$, so the normalization reduces to the requested $1/N_q$ form. The outputs are averaged over processed frames.
 
 ## Static Structure Factor Output File Structures
 
@@ -1286,50 +1290,50 @@ This section summarizes the output tables for all static-structure-factor calcul
 
 Rows:
 
-- one row per retained isotropic `|k|` value
-- rows are ordered by increasing `|k|`
+- one row per retained isotropic $|k|$ value
+- rows are ordered by increasing $|k|$
 
 Columns:
 
-- column 1: `|k|`, the magnitude of the reciprocal-space vector
-- column 2: `S(k)`, the isotropic density structure factor averaged over processed frames and trajectory files
+- column 1: $|k|$, the magnitude of the reciprocal-space vector
+- column 2: $S(k)$, the isotropic density structure factor averaged over processed frames and trajectory files
 
 Per-trajectory reports use the same two-column layout and are combined into the final output using frame-weighted averaging.
 
-With resume enabled, an existing per-trajectory density report is reused only if its `|k|` column matches the current settings. The code still reads the matching coordinate file metadata so the final frame-weighted average uses the correct frame count.
+With resume enabled, an existing per-trajectory density report is reused only if its $|k|$ column matches the current settings. The code still reads the matching coordinate file metadata so the final frame-weighted average uses the correct frame count.
 
 ### Density Directional Output
 
 Rows:
 
 - one row per sampled reciprocal-space vector
-- vectors with the same `|k|` remain separate if their directions differ
+- vectors with the same $|k|$ remain separate if their directions differ
 
 Columns:
 
-- column 1: `k_x`
-- column 2: `k_y`
-- column 3: `k_z`
-- column 4: `|k|`
-- column 5: `S(k)` for that explicit vector
+- column 1: $k_x$
+- column 2: $k_y$
+- column 3: $k_z$
+- column 4: $|k|$
+- column 5: $S(k)$ for that explicit vector
 
 Per-trajectory reports use the same five-column layout and are combined into the final output using frame-weighted averaging.
 
-With resume enabled, an existing per-trajectory directional report is reused only if its `k_x`, `k_y`, `k_z`, and `|k|` columns match the current settings. The final output is rebuilt from all reused and newly computed reports.
+With resume enabled, an existing per-trajectory directional report is reused only if its $k_x$, $k_y$, $k_z$, and $|k|$ columns match the current settings. The final output is rebuilt from all reused and newly computed reports.
 
 ### Density Along-Components Output
 
 For one-axis selections such as `x`, `y`, or `z`:
 
 - each row is one allowed value along the selected axis
-- column 1 is `|k_x|`, `|k_y|`, or `|k_z|`
-- column 2 is `S(k)` for that one-dimensional selection
+- column 1 is $|k_x|$, $|k_y|$, or $|k_z|$
+- column 2 is $S(k)$ for that one-dimensional selection
 
 For multi-axis selections such as `x+y`, `x+z`, `y+z`, or `x+y+z`:
 
-- each row is one shell-averaged total `|k|`
-- column 1 is shell-averaged `|k|`
-- column 2 is shell-averaged `S(k)`
+- each row is one shell-averaged total $|k|$
+- column 1 is shell-averaged $|k|$
+- column 2 is shell-averaged $S(k)$
 
 When multiple component selections are requested, each selection gets its own output file by appending a component label such as `_kx`, `_ky`, `_kxy`, or `_kxyz` to the requested output path.
 
@@ -1341,23 +1345,23 @@ Directional mode writes two main output files.
 
 The directional output file has one row per sampled reciprocal-space vector:
 
-- column 1: `k_x`
-- column 2: `k_y`
-- column 3: `k_z`
-- column 4: `|k|`
-- column 5: real part of `Sqp(k)`
-- column 6: imaginary part of `Sqp(k)`
+- column 1: $k_x$
+- column 2: $k_y$
+- column 3: $k_z$
+- column 4: $|k|$
+- column 5: real part of $S_{qp}(k)$
+- column 6: imaginary part of $S_{qp}(k)$
 
 The isotropic output file produced from directional mode has one row per shell:
 
-- column 1: shell-averaged `|k|`
+- column 1: shell-averaged $|k|$
 - column 2: shell-averaged real part
 - column 3: shell-averaged imaginary part
-- column 4: number of directional `k` vectors contributing to that shell
+- column 4: number of directional $k$ vectors contributing to that shell
 
-In directional small-`k` mode, the imaginary column is kept for format consistency and is written as zero.
+In directional small-$k$ mode, the imaginary column is kept for format consistency and is written as zero.
 
-With resume enabled, the directional per-trajectory report is the file that controls reuse. Its `k_x`, `k_y`, `k_z`, and `|k|` columns must match the current settings, and the matching `dipole_counts/dipole_count_<trajectory>.dat` file must exist for the same frame selection.
+With resume enabled, the directional per-trajectory report is the file that controls reuse. Its $k_x$, $k_y$, $k_z$, and $|k|$ columns must match the current settings, and the matching `dipole_counts/dipole_count_<trajectory>.dat` file must exist for the same frame selection.
 
 ### Charge-Dipole Isotropic Output
 
@@ -1365,20 +1369,20 @@ Direct isotropic charge-dipole mode writes one main output file. It begins with 
 
 Rows:
 
-- one row per generated isotropic `|k|` value
-- rows are ordered by increasing `|k|`
+- one row per generated isotropic $|k|$ value
+- rows are ordered by increasing $|k|$
 
 Columns:
 
-- column 1: `|k|`
-- column 2: dipole-normalized accumulated `Sqp(k)`
+- column 1: $|k|$
+- column 2: dipole-normalized accumulated $S_{qp}(k)$
 - column 3: average number of dipoles included by `CO-1`
 - column 4: average number of dipoles included by `CO-2`
 - column 5: average number of dipoles included by `CO-3`
 
-The `Sqp(k)` value is normalized during the calculation by the number of contributing dipoles in each processed frame, then accumulated across frames and trajectory files. It is not divided by the number of frames or trajectory files.
+The $S_{qp}(k)$ value is normalized during the calculation by the number of contributing dipoles in each processed frame, then accumulated across frames and trajectory files. It is not divided by the number of frames or trajectory files.
 
-With resume enabled, direct isotropic charge-dipole per-trajectory reports are reused only if their `|k|` column matches the current settings. The matching dipole-count file is also required so the final `CO-1`, `CO-2`, and `CO-3` average-count columns can include reused trajectories.
+With resume enabled, direct isotropic charge-dipole per-trajectory reports are reused only if their $|k|$ column matches the current settings. The matching dipole-count file is also required so the final `CO-1`, `CO-2`, and `CO-3` average-count columns can include reused trajectories.
 
 ### Charge-Dipole Dipole-Count Outputs
 

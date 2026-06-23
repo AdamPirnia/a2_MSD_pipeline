@@ -416,7 +416,7 @@ k_z=\frac{2\pi n_z}{L_z}
 }
 $$
 
-with the all-zero vector excluded. The three `k` tiers, shell width, cutoffs, and component restrictions are documented in [What The Three k Tiers Mean](Manual.md#what-the-three-k-tiers-mean), [What k_x, k_y, and k_z Mean](Manual.md#what-k_x-k_y-and-k_z-mean), and [Along k Components](Manual.md#along-k-components).
+with the all-zero vector excluded. The three $k$ tiers, shell width, cutoffs, and component restrictions are documented in [What The Three k Tiers Mean](Manual.md#what-the-three-k-tiers-mean), [What k_x, k_y, and k_z Mean](Manual.md#what-k_x-k_y-and-k_z-mean), and [Along k Components](Manual.md#along-k-components).
 
 ## Charge-Dipole Structure Factors
 
@@ -441,14 +441,15 @@ $$
 
 Only nonzero charge sites contribute. With real-space cutoffs, only dipoles within the cutoff distance of those nonzero charge sites are included.
 
-In the generated file-based workflows, each processed frame contributes the corresponding expression below divided by \(N_m(f)\), the number of contributing dipoles in that frame. Without a cutoff, \(N_m(f)\) is the number of valid dipoles after optional dipole-magnitude masking. With a cutoff, \(N_m(f)\) is the number of unique valid dipoles inside the cutoff neighborhood of the nonzero charge sites for that frame and k tier. The dipole-normalized frame contributions are then accumulated across processed frames and trajectory files.
+In the formulas below, \(N_m(f)\) is the number of contributing dipoles for frame \(f\): without a cutoff it equals the number of valid dipoles after optional magnitude masking; with a cutoff it is the number of unique valid dipoles inside the cutoff neighborhood of the nonzero charge sites for that frame and $k$ tier. Frame contributions are accumulated across all processed frames and trajectory files without dividing by frame or trajectory count.
 
 For isotropic mode with `Small k approx` unchecked:
 
 $$
 {\Huge
 S_{qp}(k) =
--\sum_q\sum_p
+-\sum_f\frac{1}{N_m(f)}
+\sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf r}_{q,p}\right)
 j_1\!\left(k|\mathbf r_{q,p}|\right)
 }
@@ -468,6 +469,7 @@ $$
 {\Huge
 S_{qp}(k) \simeq
 -\frac{k}{3}
+\sum_f\frac{1}{N_m(f)}
 \sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\mathbf r_{q,p}\right)
 }
@@ -478,7 +480,8 @@ For directional mode with `Small k approx` unchecked:
 $$
 {\Huge
 S_{qp}(\mathbf k) =
-i\sum_q\sum_p
+i\sum_f\frac{1}{N_m(f)}
+\sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf k}\right)
 \exp\!\left(i\mathbf k\cdot\mathbf r_{q,p}\right)
 }
@@ -489,15 +492,16 @@ For directional mode with `Small k approx` checked:
 $$
 {\Huge
 S_{qp}(\mathbf k) \simeq
--k\sum_q\sum_p
+-k\sum_f\frac{1}{N_m(f)}
+\sum_q\sum_p
 z_q\left(\hat{\mathbf e}_p\cdot\hat{\mathbf k}\right)
 \left(\hat{\mathbf k}\cdot\mathbf r_{q,p}\right)
 }
 $$
 
-The directional small-`k` approximation is real-valued. The output keeps the directional real/imaginary column layout described in [Charge-Dipole Directional Mode](Manual.md#charge-dipole-directional-mode), with the imaginary column equal to zero in small-`k` mode.
+The directional small-$k$ approximation is real-valued. The output keeps the directional real/imaginary column layout described in [Charge-Dipole Directional Mode](Manual.md#charge-dipole-directional-mode), with the imaginary column equal to zero in small-$k$ mode.
 
-The file-based charge-dipole workflows normalize each processed frame by the number of contributing dipoles for that frame, then accumulate the resulting `Sqp(k)` values across frames and trajectory files. They are not divided by the number of frames or trajectory files, matching the mode descriptions in [Charge-Dipole Isotropic Mode](Manual.md#charge-dipole-isotropic-mode) and [Charge-Dipole Directional Mode](Manual.md#charge-dipole-directional-mode).
+The file-based charge-dipole workflows normalize each processed frame by the number of contributing dipoles for that frame, then accumulate the resulting $S_{qp}(k)$ values across frames and trajectory files. They are not divided by the number of frames or trajectory files, matching the mode descriptions in [Charge-Dipole Isotropic Mode](Manual.md#charge-dipole-isotropic-mode) and [Charge-Dipole Directional Mode](Manual.md#charge-dipole-directional-mode).
 
 ## Charge-Charge Structure Factors
 

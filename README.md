@@ -244,13 +244,13 @@ Common density inputs:
 - `Common Terms`
 - `Coordinate Path`
 - `Output Path`
-- `k Max`, `L_x`, `L_y`, `L_z`, and `tolerance`
+- `k Max`, $L_x$, $L_y$, $L_z$, and `tolerance`
 
-Charge-dipole workflows add charge values, charge coordinates, dipole positions, and dipole vectors. If the charge-values file has multiple columns, the last column is used as the charge value; zero-charge sites are excluded before cutoff neighbor searches. Charge-dipole `Sqp(k)` outputs are normalized during the calculation by the number of contributing dipoles in each processed frame, then accumulated across frames and trajectory files.
+Charge-dipole workflows add charge values, charge coordinates, dipole positions, and dipole vectors. If the charge-values file has multiple columns, the last column is used as the charge value; zero-charge sites are excluded before cutoff neighbor searches. Charge-dipole $S_{qp}(k)$ outputs are normalized during the calculation by the number of contributing dipoles in each processed frame, then accumulated across frames and trajectory files.
 Charge-charge workflows add two charge paths, one or two coordinate paths, RDF-style coordinate slicing, isotropic/directional sections, and per-mode self-pair exclusion.
 
-The generated workflows write the requested density `S(k)`, charge-dipole `Sqp(k)`, or charge-charge `S_q(k)` outputs to the user-specified output paths.
-Static Structure Factor includes Smart Optimization profiles for density `S(k)`, charge-dipole `Sqp(k)`, and charge-charge `S_q(k)` chunk sizes, worker counts, and SLURM resource estimates.
+The generated workflows write the requested density $S(k)$, charge-dipole $S_{qp}(k)$, or charge-charge $S_q(k)$ outputs to the user-specified output paths.
+Static Structure Factor includes Smart Optimization profiles for density $S(k)$, charge-dipole $S_{qp}(k)$, and charge-charge $S_q(k)$ chunk sizes, worker counts, and SLURM resource estimates.
 
 `Isotropic static structure factor`
 
