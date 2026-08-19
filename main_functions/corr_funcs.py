@@ -16,6 +16,36 @@ except ImportError:
     from path_utils import expand_path_pattern
 
 
+def _next_pow2(n: int) -> int:
+    power = 1
+    while power < n:
+        power *= 2
+    return power
+
+
+def _fft_lagged_sum(array1: np.ndarray, array2: np.ndarray, max_lag: int) -> np.ndarray:
+    """Return raw[lag] = sum_t array1[t, ...] * array2[t + lag, ...], summed over
+    every trailing axis, for lag = 0..max_lag, computed via FFT-based linear
+    cross-correlation.
+
+    This is the O(N log N) equivalent of the dense (delta=1, every frame is a
+    time origin) direct-sum loop used elsewhere in this module: for real inputs
+    it reproduces that loop's raw per-lag sums to floating-point precision, and
+    is used only for that dense case. It does not attempt to reproduce a
+    strided (delta > 1) subset of time origins, so callers must keep using the
+    direct loop when delta > 1.
+    """
+    n_frames = array1.shape[0]
+    nfft = _next_pow2(n_frames + max_lag)
+    fft1 = np.fft.rfft(array1, n=nfft, axis=0)
+    fft2 = np.fft.rfft(array2, n=nfft, axis=0)
+    cross = np.fft.irfft(np.conj(fft1) * fft2, n=nfft, axis=0)
+    raw = cross[: max_lag + 1]
+    if raw.ndim > 1:
+        raw = raw.reshape(raw.shape[0], -1).sum(axis=1)
+    return raw.astype(np.float64)
+
+
 def _validate_sampling(delta: int, max_lag: int, length: int) -> tuple[int, int]:
     delta = int(delta)
     max_lag = int(max_lag)
@@ -114,7 +144,11 @@ def _scalar_single_correlation(
     def corr_at_lag(lag: int) -> float:
         return _mean_product(arr1[: arr1.shape[0] - lag : delta], arr2[lag::delta], "i")
 
-    raw_values = np.array([corr_at_lag(lag) for lag in range(max_lag + 1)], dtype=np.float64)
+    if delta == 1:
+        counts = (arr1.shape[0] - np.arange(max_lag + 1)).astype(np.float64)
+        raw_values = _fft_lagged_sum(arr1, arr2, max_lag) / counts
+    else:
+        raw_values = np.array([corr_at_lag(lag) for lag in range(max_lag + 1)], dtype=np.float64)
     variance = float(raw_values[0])
     if variance == 0.0:
         raise ValueError("C(0) is zero; cannot normalize correlation function")
@@ -140,10 +174,15 @@ def _scalar_multiple_correlation(
     def corr_at_lag(lag: int) -> float:
         return _mean_product(arr1[: arr1.shape[0] - lag : delta, :], arr2[lag::delta, :], "ij")
 
-    raw_values = np.array(
-        [corr_at_lag(lag) for lag in range(max_lag + 1)],
-        dtype=np.float64,
-    )
+    if delta == 1:
+        n_cols = arr1.shape[1]
+        counts = (arr1.shape[0] - np.arange(max_lag + 1)).astype(np.float64) * n_cols
+        raw_values = _fft_lagged_sum(arr1, arr2, max_lag) / counts
+    else:
+        raw_values = np.array(
+            [corr_at_lag(lag) for lag in range(max_lag + 1)],
+            dtype=np.float64,
+        )
     variance = float(raw_values[0])
     if variance == 0.0:
         raise ValueError("C(0) is zero; cannot normalize correlation function")
@@ -172,13 +211,23 @@ def _vector_single_correlation(
         b = arr2[lag::delta]
         return float(np.einsum("ij,ij->", a, b, optimize=True) / a.shape[0])
 
-    raw_values = np.array([corr_at_lag(lag) for lag in range(max_lag + 1)], dtype=np.float64)
+    if delta == 1:
+        counts = (arr1.shape[0] - np.arange(max_lag + 1)).astype(np.float64)
+        raw_values = _fft_lagged_sum(arr1, arr2, max_lag) / counts
+    else:
+        raw_values = np.array([corr_at_lag(lag) for lag in range(max_lag + 1)], dtype=np.float64)
     variance = float(raw_values[0])
     if variance == 0.0:
         raise ValueError("C(0) is zero; cannot normalize correlation function")
+    # The normalized curve C(t)/C(0) is coef-independent (coef cancels), so it
+    # uses the raw variance. The reported variance is scaled by coef^2 (a
+    # variance scales quadratically under a linear rescaling of the underlying
+    # vector, e.g. a unit conversion) so any caller of this function directly
+    # gets a variance consistent with what the generated-script pipeline saves.
     values = raw_values / variance
     times = np.arange(max_lag + 1, dtype=np.float64) * float(t1)
-    return variance, np.column_stack((times, values))
+    scaled_variance = variance * float(coef) ** 2
+    return scaled_variance, np.column_stack((times, values))
 
 
 def _vector_multiple_correlation(
@@ -201,16 +250,25 @@ def _vector_multiple_correlation(
         b = arr2[lag::delta]
         return float(np.einsum("ijk,ijk->", a, b, optimize=True) / (a.shape[0] * a.shape[1]))
 
-    raw_values = np.array(
-        [corr_at_lag(lag) for lag in range(max_lag + 1)],
-        dtype=np.float64,
-    )
+    if delta == 1:
+        n_particles = arr1.shape[1]
+        counts = (arr1.shape[0] - np.arange(max_lag + 1)).astype(np.float64) * n_particles
+        raw_values = _fft_lagged_sum(arr1, arr2, max_lag) / counts
+    else:
+        raw_values = np.array(
+            [corr_at_lag(lag) for lag in range(max_lag + 1)],
+            dtype=np.float64,
+        )
     variance = float(raw_values[0])
     if variance == 0.0:
         raise ValueError("C(0) is zero; cannot normalize correlation function")
+    # See _vector_single_correlation: normalized curve uses raw variance,
+    # reported variance is coef^2-scaled so direct callers stay consistent
+    # with the generated-script pipeline.
     values = raw_values / variance
     times = np.arange(max_lag + 1, dtype=np.float64) * float(t1)
-    return variance, np.column_stack((times, values))
+    scaled_variance = variance * float(coef) ** 2
+    return scaled_variance, np.column_stack((times, values))
 
 
 def calculate_correlation(
@@ -415,7 +473,14 @@ def _calculate_correlation_file_task(params: dict[str, Any]) -> dict[str, Any]:
             compact_columns=(0,),
             result_format=True,
         )
-        scaled_variance = float(variance) * float(params["coef"]) ** 2
+        # Vector kinds already return a coef^2-scaled variance from
+        # calculate_correlation (see _vector_single_correlation /
+        # _vector_multiple_correlation). Only scale here for scalar kinds,
+        # which have no coef concept internally, to avoid double-scaling.
+        if str(params["array1_kind"]).strip().lower() == "vector":
+            scaled_variance = float(variance)
+        else:
+            scaled_variance = float(variance) * float(params["coef"]) ** 2
         save_numeric_array(
             variance_output_file,
             np.array([[scaled_variance]], dtype=np.float64),

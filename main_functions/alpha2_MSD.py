@@ -23,8 +23,6 @@ def expand_path_pattern(pattern, common_param="", file_index=None):
     
     # Replace {i} expressions with file index if provided
     if file_index is not None:
-        import re
-        
         def replace_expression(match):
             expr = match.group(1).strip()
             try:
@@ -304,8 +302,8 @@ def a2_MSD(
         msd_avg = msd_accumulator / successful_files
         msd4_avg = msd4_accumulator / successful_files
         
-        # Average over particles if more than 2 molecules
-        if partcl_num > 2:
+        # Average over particles if more than 1 molecule
+        if partcl_num > 1:
             msd_avg = np.mean(msd_avg, axis=1)  # Average over molecules
             msd4_avg = np.mean(msd4_avg, axis=1)
         

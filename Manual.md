@@ -276,12 +276,13 @@ Fields:
 
 - `Input Pattern`: full input `path + filename + extension` pattern for wrapped coordinate files
 - `Output Pattern`: full output `path + filename + extension` pattern for continuous-coordinate files
-- `XSC file`: file containing simulation box dimensions
+- `Ensemble`: `Constant Volume` (NVT) or `Constant Pressure` (NPT); see below
+- `XSC file`: file containing simulation box dimensions. For `Constant Volume`, one box-size snapshot is enough (the last frame of the resolved XSC file is used for the whole run, unchanged from prior versions). For `Constant Pressure`, this must resolve to a trajectory of box dimensions with one row per coordinate frame for each DCD index — a single restart-style snapshot is not enough, since the box changes frame to frame.
 - `Num atoms`: total number of atoms in each extracted coordinate file
 - `Interval`: optional frame interval expression to restrict the processed frame range
 - `Stride`: frame stride used during unwrapping
 - `DCD Selection`: optional subset of DCD indices to process
-- `Chunk Size`: memory-related processing chunk size, or `auto`
+- `Chunk Size` / `Workers`: memory-related processing chunk size (or `auto`) and maximum worker processes, on one row
 
 Option:
 
@@ -314,8 +315,14 @@ If `Fix 1st Frame` is unchecked, Step 2 behaves as before and uses the first fra
 What this section does:
 
 - reads wrapped coordinates
-- uses the box information from the XSC file
+- uses the box information from the XSC file (a single snapshot for `Constant Volume`, or a per-frame box trajectory for `Constant Pressure`)
 - reconstructs continuous trajectories across periodic boundaries
+
+### Ensemble: Constant Volume vs. Constant Pressure
+
+`Constant Volume` (NVT) reads one box-size frame from the XSC file and applies it uniformly to every frame of every DCD. This is exact for NVT trajectories, where the box does not change, and is the only behavior this step had before the `Ensemble` field existed.
+
+`Constant Pressure` (NPT) instead reads a full per-frame box-dimension trajectory from each DCD index's own XSC file and uses the box at each frame when correcting periodic-boundary crossings, repairing the first frame, and wrapping groups back into the cell. The XSC file resolved for a given DCD index must contain exactly as many box-dimension rows as that index's coordinate file has frames, or Step 2 stops with an error naming the mismatch. Like any minimum-image unwrapping scheme, this assumes the box does not change by a large fraction between two consecutive saved frames; ordinary NPT box fluctuations between saved frames are far smaller than that and reconstruct exactly.
 
 Output unit:
 
@@ -433,7 +440,7 @@ This workflow can generate either individual dipole scripts or collective dipole
 
 Field:
 
-- `Calculation Method`: choose `individual` or `collective`
+- `Calculation Method`: choose `individual`, `collective`, or `custom`
 - `PSF Pattern`: full input `path + filename + extension` pattern for the PSF used by both dipole methods
 - `Target Selection`: VMD atom selection defining the atoms included in dipole calculations
 - `VMD Path`: full path to the VMD executable
@@ -446,7 +453,7 @@ Field:
 Use these fields:
 
 - `Coordinates Pattern`: full input `path + filename + extension` pattern for coordinate files
-- `All neutral particles`: check only if every net charge per selected group is zero
+- `All neutral particles`: check only if every net charge per selected group is zero. This also selects the dipole center used for `individual` and `custom` mode: neutral groups use the geometric center (origin-independent for a neutral group), non-neutral groups use the true center of mass. This choice does not depend on `Dipole Unit`.
 - `COM Patterns`: full input `path + filename + extension` pattern for center-of-mass files used when `All neutral particles` is not checked
 - `Grouping Unit`: grouping used to define each individual dipole: `residue`, `chain`, `segname`, or `all`; `residue` groups by VMD `segid + resid`
 - `Dipole Vectors Pattern`: full output `path + filename + extension` pattern for dipole-vector files
@@ -483,6 +490,22 @@ Important input note:
 - do not use COM-coordinate files such as `com_xyz` as the dipole coordinate input
 - the coordinate file must match the atom selection resolved from the PSF
 - when `All neutral particles` is not checked, the `COM Patterns` file must contain one COM vector per resolved group for each frame
+
+### If `Calculation Method = custom`
+
+Individual per-group dipoles computed directly from a DCD trajectory through VMD, with more selection flexibility than `individual` mode (no pre-extracted coordinate file is needed).
+
+Use these fields:
+
+- `DCD Pattern`: DCD file pattern read directly by VMD
+- `Grouping Unit`, `Output Pattern`: shared with `individual` mode, same meaning
+- `All neutral particles`: shared with `individual` mode; selects the VMD dipole center (`-geocenter` when checked, `-masscenter` when unchecked) the same way it does for `individual` mode
+
+What it does:
+
+- loads the PSF and DCD directly in VMD and re-evaluates `Target Selection` every frame, so groups that enter or leave the selection at different frames are all captured
+- computes one dipole vector (and magnitude) per resolved group per frame using VMD's `measure dipole`
+- groups absent from a given frame are stored as `NaN` in the saved arrays, distinguishable from a true-zero dipole
 
 ### If `Calculation Method = collective`
 
@@ -589,6 +612,8 @@ When disabled, the workflow runs without those additional checks and may be fast
 ## Module 4: Correlation Functions
 
 This module generates scripts for time-correlation analysis from numeric array files that already exist on disk.
+
+When `Shift (delta)` is `1` (every frame used as a time origin, the common case), correlation sums are computed with an FFT-based algorithm instead of a direct per-lag loop; results are numerically identical to the direct sum but computed in `O(N log N)` instead of `O(N * max_lag)`, which matters for long trajectories with a large `Max Length (num. frames)`. Any `Shift (delta) > 1` still uses the direct per-lag loop, since it strided-samples the set of time origins rather than using every frame.
 
 ## Common Parameters
 
@@ -756,6 +781,7 @@ Fields:
 - `Time Axis Exist`: tells the software whether the MSD file already contains a time column
 - `Saved Frame dt`: used only when `Time Axis Exist` is unchecked
 - `Time Axis Unit`: recorded as user metadata
+- `Fit Skip Frames`: optional integer number of leading MSD points to exclude from the linear diffusion fit (for example, to skip the short-time ballistic/non-diffusive regime). `0` (default) fits every point, matching the software's original behavior; this control is entirely optional.
 
 How MSD input is interpreted:
 
@@ -763,13 +789,13 @@ How MSD input is interpreted:
   - column 1 is used as time
   - column 2 is used as MSD
 - if `Time Axis Exist` is unchecked:
-  - the numeric MSD table is flattened into one MSD series
-  - the time axis is built as `t = (i - 1) * dt`
-  - this matches the current Mathematica-style workflow used in the project
+  - the last column of the MSD file is used as the MSD series (a single-column file is read as-is)
+  - the time axis is built as `t = i * dt` for row index `i` starting at 0
 
 How `D MSD` is calculated:
 
-- the software fits `MSD(t) = a t` through the origin
+- `Fit Skip Frames` leading points are dropped from both the time and MSD series before fitting
+- the software fits the remaining `MSD(t) = a t` through the origin
 - then reports `D = a / 6`
 
 ### Shared lower fields

@@ -482,7 +482,7 @@ def vmd_dipole_individual_from_dcd(
     dipole_unit="e·Å", stride=1, max_workers=None, dcd_indices=None,
     vectors_pattern=None, magnitudes_pattern=None,
     vectors_output_io_spec=None, magnitudes_output_io_spec=None,
-    common_term="",
+    common_term="", neutral=False,
 ):
     """
     Calculate per-group individual dipole moments directly from DCD files using VMD.
@@ -497,6 +497,15 @@ def vmd_dipole_individual_from_dcd(
     (n_frames, n_groups) so no computed dipole moment is ever discarded.
     Groups absent from a particular frame are stored as NaN, distinguishable from
     a true-zero dipole.
+
+    Parameters
+    ----------
+    neutral : bool, optional
+        Whether every group in the target selection has zero net charge. Neutral
+        groups are origin-independent, so VMD's geometric center (``-geocenter``)
+        is used. Non-neutral groups require the true center of mass
+        (``-masscenter``) for a physically meaningful dipole, regardless of
+        dipole_unit. Default is False (mass-centered).
     """
     import multiprocessing as mp
     try:
@@ -536,7 +545,7 @@ def vmd_dipole_individual_from_dcd(
     os.makedirs("writenCodes", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
 
-    dipole_center_option = "-geocenter" if dipole_unit == "Debye" else "-masscenter"
+    dipole_center_option = "-geocenter" if neutral else "-masscenter"
     debye_flag = " -debye" if dipole_unit == "Debye" else ""
 
     def _write_tcl(i):

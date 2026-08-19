@@ -15,6 +15,9 @@ NAMD_INTERNAL_TO_ANGSTROM_PER_PS = 20.45482706
 ANGSTROM2_PER_PS2_PER_M2_PER_S2 = 1.0e-4
 AVOGADRO = 6.02214076e23
 BOLTZMANN = 1.380649e-23
+# If |C(t_end)/C(0)| exceeds this, the VACF has not visibly decayed by the end
+# of the supplied data, so trapezoidal integration to t_end underestimates tau.
+VACF_TAIL_DECAY_WARNING_THRESHOLD = 0.01
 
 
 def _resolve_vacf_files(vacf_path):
@@ -84,7 +87,7 @@ def _extract_time_value_series(file_path, label, time_axis_exists=False, stride=
     if time_axis_exists:
         return data[::stride, 0].astype(np.float64), data[::stride, 1].astype(np.float64)
 
-    return None, np.asarray(data, dtype=np.float64)[::stride].reshape(-1)
+    return None, data[::stride, -1].astype(np.float64)
 
 
 def _resolve_analysis_file_paths(base_directory, vacf_path, num_vacf=None):
@@ -172,9 +175,14 @@ def compute_diffusion_from_msd_file(
     time_axis_exists=False,
     time_axis_unit="ps",
     msd_stride=1,
+    msd_fit_skip_frames=0,
 ):
     if not time_axis_exists and time_step_ps <= 0:
         raise ValueError("time_step_ps must be positive.")
+
+    fit_skip_frames = int(msd_fit_skip_frames)
+    if fit_skip_frames < 0:
+        raise ValueError("msd_fit_skip_frames must be a non-negative integer.")
 
     file_path = _resolve_single_analysis_file_path(
         base_directory=base_directory,
@@ -194,11 +202,20 @@ def compute_diffusion_from_msd_file(
         times_ps = np.arange(msd_series.size, dtype=np.float64) * float(time_step_ps)
     else:
         times_ps = np.asarray(time_axis, dtype=np.float64)
-    denominator = float(np.dot(times_ps, times_ps))
+
+    if fit_skip_frames >= times_ps.size:
+        raise ValueError(
+            f"msd_fit_skip_frames ({fit_skip_frames}) skips all {times_ps.size} available "
+            "MSD point(s); reduce it so at least one point remains for the fit."
+        )
+
+    fit_times_ps = times_ps[fit_skip_frames:]
+    fit_msd_series = msd_series[fit_skip_frames:]
+    denominator = float(np.dot(fit_times_ps, fit_times_ps))
     if np.isclose(denominator, 0.0):
         raise ValueError("MSD series must contain at least two time points for the linear fit.")
 
-    slope_ang2_per_ps = float(np.dot(times_ps, msd_series) / denominator)
+    slope_ang2_per_ps = float(np.dot(fit_times_ps, fit_msd_series) / denominator)
     diffusion_constant_ang2_per_ps = float(slope_ang2_per_ps / 6.0)
     return {
         "msd_file": str(file_path),
@@ -206,6 +223,8 @@ def compute_diffusion_from_msd_file(
         "msd_time_axis_exists": bool(time_axis_exists),
         "msd_time_axis_unit": str(time_axis_unit),
         "msd_stride": int(msd_stride),
+        "msd_fit_skip_frames": fit_skip_frames,
+        "msd_fit_points_used": int(fit_msd_series.size),
         "msd_fit_slope_ang2_per_ps": slope_ang2_per_ps,
         "msd_diffusion_constant_ang2_per_ps": diffusion_constant_ang2_per_ps,
         "msd_diffusion_constant_cm2_per_s": float(diffusion_constant_ang2_per_ps * 1.0e-4),
@@ -229,6 +248,7 @@ def compute_diffusion_from_vacf_files(
     msd_path=None,
     vacf_stride=1,
     msd_stride=1,
+    msd_fit_skip_frames=0,
     msd_time_step_ps=None,
     msd_time_axis_exists=False,
     msd_time_axis_unit="ps",
@@ -294,6 +314,13 @@ def compute_diffusion_from_vacf_files(
             else:
                 file_time_ps = np.asarray(file_time_ps, dtype=np.float64)
             tau_ps = float(np.trapezoid(normalized_for_integration, file_time_ps))
+            tail_ratio = float(abs(normalized_for_integration[-1]))
+            if tail_ratio > VACF_TAIL_DECAY_WARNING_THRESHOLD:
+                print(
+                    f"⚠ VACF in {file_path} has not decayed by the end of the data: "
+                    f"|C(t_end)/C(0)| = {tail_ratio:.4f} (threshold {VACF_TAIL_DECAY_WARNING_THRESHOLD}). "
+                    "tau and D from this file may be underestimated; consider supplying a longer VACF."
+                )
             equipartition_variance = _equipartition_variance_ang2_per_ps2(
                 temperature_k=temperature_k,
                 molar_mass_g_mol=molar_mass_g_mol,
@@ -322,6 +349,7 @@ def compute_diffusion_from_vacf_files(
                     "equipartition_variance_ang2_per_ps2": float(equipartition_variance),
                     "variance_percent_difference": float(variance_percent_difference),
                     "variance_source_for_diffusion": variance_source,
+                    "vacf_tail_decay_ratio": tail_ratio,
                 }
             )
 
@@ -395,6 +423,7 @@ def compute_diffusion_from_vacf_files(
             time_axis_exists=msd_time_axis_exists,
             time_axis_unit=msd_time_axis_unit,
             msd_stride=msd_stride,
+            msd_fit_skip_frames=msd_fit_skip_frames,
         )
         result.update(msd_result)
 

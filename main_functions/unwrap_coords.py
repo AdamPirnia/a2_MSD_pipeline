@@ -71,6 +71,27 @@ def validate_path_pattern(pattern):
     return True, ""
 
 
+def _read_xsc_box_trajectory(xsc_path):
+    """Read every data row of an XSC file as one (x, y, z) box-dimension frame.
+
+    Used for constant-pressure (NPT) ensembles, where box dimensions fluctuate
+    frame to frame and a single XSC snapshot is not representative of the
+    whole trajectory.
+    """
+    with open(xsc_path, 'r') as fr:
+        lines = fr.readlines()
+    box_rows = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        parts = stripped.split()
+        box_rows.append([float(parts[1]), float(parts[5]), float(parts[9])])
+    if not box_rows:
+        raise ValueError(f"No box-dimension rows found in XSC file: {xsc_path}")
+    return np.array(box_rows, dtype=np.float64)
+
+
 def _tcl_quote(value):
     """Return a Tcl-safe double-quoted string literal body."""
     text = str(value)
@@ -143,9 +164,10 @@ def unwrapper(
     repair_first_frame=False,
     wrap_groups_into_cell=False,
     wrap_center="cell",
+    ensemble="nvt",
 ):
     """
-    Read a series of coordinates directly extracted from MD trajectories, unwrap 
+    Read a series of coordinates directly extracted from MD trajectories, unwrap
     periodic boundary crossings, and write out unwrapped coordinate files with
     optimized memory usage and optional parallel processing.
 
@@ -174,6 +196,16 @@ def unwrapper(
     xsc_pattern : str
         Path pattern for XSC files. Can contain * (common term) and {i} (file index).
         Example: "anlz/NVT_*/restart_equil.xsc" (if same for all) or "anlz/NVT_*/restart_{i}.xsc"
+        For ensemble="npt", each resolved XSC file must contain a full trajectory of
+        box-dimension rows (one row per coordinate frame in the corresponding input
+        file for that index), not a single restart snapshot.
+    ensemble : str, optional
+        "nvt" (constant volume, default) reads one box-size frame from the XSC file
+        for the first DCD index and applies it uniformly to every frame of every
+        file, which is exact for NVT and was the only behavior before this option
+        existed. "npt" (constant pressure) reads a full per-frame box-dimension
+        trajectory from each index's own XSC file and uses it frame-by-frame during
+        unwrapping, first-frame repair, and group wrapping.
     num_dcd : int
         Number of frames to process (i.e. number of input files).
     max_workers : int, optional
@@ -230,6 +262,10 @@ def unwrapper(
     if not is_valid:
         raise ValueError(f"Invalid XSC pattern: {error_msg}")
 
+    ensemble = str(ensemble or "nvt").strip().lower()
+    if ensemble not in {"nvt", "npt"}:
+        raise ValueError("ensemble must be 'nvt' (constant volume) or 'npt' (constant pressure).")
+
     valid_grouping_unit = grouping_unit in {"residue", "chain", "segname"}
     first_frame_repair_enabled = bool(
         repair_first_frame
@@ -282,24 +318,31 @@ def unwrapper(
         os.makedirs(output_dir, exist_ok=True)
     
     # Read box size from XSC file
-    try:
-        # For XSC, use the first file's pattern (often XSC is the same for all)
-        xsc_file = expand_path_pattern(xsc_pattern, common_term, dcd_list[0] if dcd_list else 0)
-        xsc_path = os.path.join(baseDir, xsc_file)
-        if os.path.exists(xsc_path) and os.path.getsize(xsc_path) <= 0:
-            raise ValueError(_format_unreadable_file_message("XSC", xsc_path))
-        
-        with open(xsc_path, 'r') as fr:
-            lines = fr.readlines()
-        box_size = np.array([
-            float(lines[-1].split()[1]),   # x-dimension
-            float(lines[-1].split()[5]),   # y-dimension  
-            float(lines[-1].split()[9])    # z-dimension
-        ])
-        print(f"✓ Box dimensions from {xsc_path}: {box_size}")
-        
-    except (FileNotFoundError, IndexError, ValueError) as e:
-        raise ValueError(f"Error reading XSC file {xsc_path}: {e}")
+    box_size = None
+    if ensemble == "nvt":
+        try:
+            # For XSC, use the first file's pattern (often XSC is the same for all)
+            xsc_file = expand_path_pattern(xsc_pattern, common_term, dcd_list[0] if dcd_list else 0)
+            xsc_path = os.path.join(baseDir, xsc_file)
+            if os.path.exists(xsc_path) and os.path.getsize(xsc_path) <= 0:
+                raise ValueError(_format_unreadable_file_message("XSC", xsc_path))
+
+            with open(xsc_path, 'r') as fr:
+                lines = fr.readlines()
+            box_size = np.array([
+                float(lines[-1].split()[1]),   # x-dimension
+                float(lines[-1].split()[5]),   # y-dimension
+                float(lines[-1].split()[9])    # z-dimension
+            ])
+            print(f"✓ Box dimensions from {xsc_path}: {box_size}")
+
+        except (FileNotFoundError, IndexError, ValueError) as e:
+            raise ValueError(f"Error reading XSC file {xsc_path}: {e}")
+    else:
+        print(
+            "✓ Constant Pressure (NPT) ensemble selected: each input file will read its own "
+            "per-frame box-dimension trajectory from its XSC file during processing."
+        )
     
     # Validate first input file exists
     if dcd_list:
@@ -334,7 +377,7 @@ def unwrapper(
                     i, baseDir, input_pattern, output_pattern, xsc_pattern,
                     box_size, chunk_size, common_term, input_io_spec, output_io_spec,
                     psf_pattern, target_selection, vmd, grouping_unit, first_frame_repair_enabled,
-                    group_wrap_enabled, wrap_center
+                    group_wrap_enabled, wrap_center, ensemble
                 )
                 results['success'] += 1
                 print(f"✓ Completed file {i}")
@@ -347,12 +390,12 @@ def unwrapper(
             # Submit all jobs
             future_to_index = {
                 executor.submit(
-                    _unwrap_single_file, 
+                    _unwrap_single_file,
                     i, baseDir, input_pattern, output_pattern, xsc_pattern,
                     box_size, chunk_size, common_term, input_io_spec, output_io_spec,
                     psf_pattern, target_selection, vmd, grouping_unit, first_frame_repair_enabled,
-                    group_wrap_enabled, wrap_center
-                ): i 
+                    group_wrap_enabled, wrap_center, ensemble
+                ): i
                 for i in dcd_list
             }
             
@@ -577,20 +620,27 @@ def _validate_group_indices_match(group_indices, usable_atoms, file_index, opera
 
 
 def _wrap_groups_into_cell(unwrapped_coords, box_size, group_indices, center_mode="cell"):
-    """Wrap each already-unwrapped group as a whole body into the primary cell."""
+    """Wrap each already-unwrapped group as a whole body into the primary cell.
+
+    box_size may be a single (3,) box (NVT, constant across frames) or a
+    per-frame (n_frames, 3) box trajectory (NPT).
+    """
 
     wrapped = np.array(unwrapped_coords, copy=True)
     center_by_selection = str(center_mode or "cell").strip().lower() == "extracted selection com"
-    box_center = box_size.reshape(1, 3) * 0.5
+    box_size = np.asarray(box_size, dtype=np.float64)
+    per_frame_box = box_size.ndim == 2
 
     for frame_index in range(wrapped.shape[0]):
         frame = wrapped[frame_index]
+        frame_box = box_size[frame_index] if per_frame_box else box_size
+        box_center = frame_box.reshape(1, 3) * 0.5
         if center_by_selection:
             frame += box_center - np.mean(frame, axis=0, keepdims=True)
         for indices in group_indices:
             group = frame[indices]
             group_center = np.mean(group, axis=0)
-            group_shift = box_size * np.floor(group_center / box_size)
+            group_shift = frame_box * np.floor(group_center / frame_box)
             frame[indices] = group - group_shift
     return wrapped
 
@@ -598,27 +648,28 @@ def _wrap_groups_into_cell(unwrapped_coords, box_size, group_indices, center_mod
 def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_pattern,
                        box_size, chunk_size, common_term, input_io_spec=None, output_io_spec=None,
                        psf_pattern=None, target_selection=None, vmd=None, grouping_unit="residue",
-                       repair_first_frame=False, wrap_groups_into_cell=False, wrap_center="cell"):
+                       repair_first_frame=False, wrap_groups_into_cell=False, wrap_center="cell",
+                       ensemble="nvt"):
     """Process a single coordinate file with vectorized unwrapping algorithm."""
-    
+
     input_file_rel = expand_path_pattern(input_pattern, common_term, file_index)
     output_file_rel = expand_path_pattern(output_pattern, common_term, file_index)
-    
+
     input_file = os.path.join(baseDir, input_file_rel)
     output_file = os.path.join(baseDir, output_file_rel)
-    
+
     # Ensure output directory exists
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
+
     try:
         # Load coordinates
         print(f"Processing {input_file}...")
         coords = _load_coordinate_array(input_file, dtype=np.float32, io_spec=input_io_spec)
-        
+
         if coords.ndim == 1:
             coords = coords.reshape(1, -1)
         n_frames, n_cols = coords.shape
-        
+
         # Validate dimensions
         usable_atoms = _resolve_usable_atom_count(None, n_cols)
         usable_cols = usable_atoms * 3
@@ -629,6 +680,25 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
 
         # Reshape to (frames, atoms, 3)
         coords = coords.reshape(n_frames, usable_atoms, 3)
+
+        box_trajectory = None
+        if ensemble == "npt":
+            xsc_file_rel = expand_path_pattern(xsc_pattern, common_term, file_index)
+            xsc_full_path = os.path.join(baseDir, xsc_file_rel)
+            if not os.path.exists(xsc_full_path):
+                raise FileNotFoundError(
+                    f"XSC file not found for constant-pressure (NPT) unwrapping of index {file_index}: {xsc_full_path}"
+                )
+            box_trajectory = _read_xsc_box_trajectory(xsc_full_path)
+            if box_trajectory.shape[0] != n_frames:
+                raise ValueError(
+                    f"NPT ensemble: XSC file {xsc_full_path} has {box_trajectory.shape[0]} box-dimension "
+                    f"row(s) but the coordinate file for index {file_index} has {n_frames} frame(s). "
+                    "For Constant Pressure, the XSC file must contain one box row per coordinate frame."
+                )
+            frame_box = box_trajectory
+        else:
+            frame_box = box_size
 
         group_indices = None
         if repair_first_frame or wrap_groups_into_cell:
@@ -643,7 +713,8 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
             )
 
         if repair_first_frame:
-            repaired_first_frame, atom_shifts = _repair_first_frame_by_group(coords[0], box_size, group_indices)
+            frame0_box = box_trajectory[0] if box_trajectory is not None else box_size
+            repaired_first_frame, atom_shifts = _repair_first_frame_by_group(coords[0], frame0_box, group_indices)
             shifted_atoms = int(np.count_nonzero(np.any(np.abs(atom_shifts) > 1e-6, axis=1)))
             coords += atom_shifts.reshape(1, usable_atoms, 3)
             coords[0] = repaired_first_frame
@@ -651,7 +722,7 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
                 f"✓ Fixed first frame using {len(group_indices)} {grouping_unit} group(s); "
                 f"applied shifts to {shifted_atoms} atom(s) across all frames"
             )
-        
+
         # Vectorized unwrapping algorithm - much more efficient than loops
         if n_frames == 1:
             # Single frame case - first-frame group repair may still have been applied.
@@ -659,18 +730,21 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
         else:
             # Displacements between consecutive frames: shape (T-1, N, 3)
             disp = np.diff(coords, axis=0)
-            
+
             # Apply minimum image convention in one vectorized step:
             # disp_MI = disp - box * round(disp / box)
-            disp -= box_size * np.round(disp / box_size)
-            
+            # For NPT, each displacement step uses the box of the frame it arrives at
+            # (box_trajectory[1:]); for NVT the box is constant across all steps.
+            step_box = box_trajectory[1:].reshape(-1, 1, 3) if box_trajectory is not None else box_size
+            disp -= step_box * np.round(disp / step_box)
+
             # Now integrate displacements to get unwrapped positions
             unwrapped = np.empty_like(coords)
             unwrapped[0] = coords[0]                               # reference frame
             unwrapped[1:] = coords[0] + np.cumsum(disp, axis=0)    # cumulative sum
 
         if wrap_groups_into_cell:
-            unwrapped = _wrap_groups_into_cell(unwrapped, box_size, group_indices, wrap_center)
+            unwrapped = _wrap_groups_into_cell(unwrapped, frame_box, group_indices, wrap_center)
             print(f"✓ Wrapped {len(group_indices)} {grouping_unit} group(s) into the cell")
 
         # Flatten back to (n_frames, n_cols)
