@@ -48,7 +48,15 @@ $$
 }
 $$
 
-The `Fix 1st Frame` option repairs molecules already split in the first frame before the normal unwrapping pass; see [Step 2: Continuous Coordinates](Manual.md#step-2-continuous-coordinates).
+This continuous update is what MSD and diffusion analysis require. Step 2 also offers a `Whole molecules in cell` mode: for each frame independently it reconstructs every whole molecule (from PSF bonds or fixed atom blocks) and then translates each whole molecule by an integer number of box vectors so its center lies in the primary cell. The per-frame shift for molecule $g$ is
+
+$$
+{\Huge
+\mathbf s_g(t) = -\,\mathbf L\,\Big\lfloor \tfrac{\mathbf c_g(t)}{\mathbf L} \Big\rceil
+}
+$$
+
+where $\mathbf c_g(t)$ is the whole-molecule center. This produces a wrapped trajectory with no split molecules, suitable for structure factors, densities, and dipoles, but not for MSD. The `Fix 1st Frame` option (continuous mode only) applies the same whole-molecule reconstruction to the first frame and propagates the resulting integer-box shifts to every frame before the normal unwrapping pass; see [Step 2: Continuous Coordinates](Manual.md#step-2-continuous-coordinates).
 
 ## Velocities and Dipoles
 
@@ -80,6 +88,36 @@ $$
 \sqrt{\mu_x^2+\mu_y^2+\mu_z^2}
 }
 $$
+
+### Reference-point (single) dipole mode
+
+The `Use reference point (single)` option restricts the calculation to molecules whose probe atom lies within a cutoff of a single moving reference point $\mathbf p(f)$ at frame $f$; see [Dipole Calculations Tab](Manual.md#dipole-calculations-tab). Molecule $g$ contributes at frame $f$ when
+
+$$
+{\Huge
+\left\lVert \mathbf r_{\mathrm{probe},g}(f) - \mathbf p(f) \right\rVert \le r_{\mathrm{cut}}
+}
+$$
+
+For `individual` (and `custom`) mode, each contributing molecule gets its usual dipole $\boldsymbol\mu_g(f) = \sum_i q_i\,(\mathbf r_i - \mathbf c_g)$ plus a distance vector from its center $\mathbf c_g$ to the reference point,
+
+$$
+{\Huge
+\mathbf d_g(f) = \mathbf c_g(f) - \mathbf p(f)
+}
+$$
+
+with $\mathbf c_g$ the mass-weighted COM (non-neutral groups) or the geometric center (`All neutral particles`). For `collective` mode the software writes, over every atom $i$ of every contributing molecule,
+
+$$
+{\Huge
+\mathbf M(f) = \sum_i q_i\,\big(\mathbf r_i(f) - \mathbf p(f)\big)
+\qquad
+S(f) = \sum_i q_i\,\big\lVert \mathbf r_i(f) - \mathbf p(f) \big\rVert
+}
+$$
+
+$\mathbf M(f)$ is the collective dipole referenced to $\mathbf p(f)$. $S(f)$ is a charge-weighted scalar distance sum: it depends on the choice of reference point and is not a rotational invariant, and it is reported as defined here. All distances are plain Euclidean (no minimum image), so the coordinate input should already be wrapped when periodicity matters.
 
 ## MSD and Non-Gaussian Parameters
 

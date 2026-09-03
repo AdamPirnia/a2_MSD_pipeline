@@ -82,12 +82,16 @@ This module prepares trajectory-derived data for downstream analysis. It include
 3. `COM calculation`
    Computes center-of-mass trajectories for molecules or coarse-grained units.
 
-Current continuous-coordinate behavior highlights:
+Current Step 1 behavior highlights:
 
-- Step 2 normally uses the first input frame as the continuity reference
-- optional `Fix 1st Frame` repairs molecules already split in that first frame before unwrapping
-- `Fix 1st Frame` has its own Step 2 `PSF Pattern`, `Target Selection`, `VMD Path`, and `Grouping Unit` inputs
-- when enabled, the first-frame repair shifts are applied consistently to every frame before normal unwrapping
+- `Selection Mode` chooses how a distance-based `Target Selection` is evaluated: `Reference-frame static set` (evaluate once on a chosen `Reference frame`, fixed atom set) or `True per-frame selection` (re-evaluate every frame, zero-padded output plus a `.counts.npy` sidecar)
+- every run writes a `<output>.npy.atoms.npz` sidecar with the PSF index and resid of each coordinate slot; each generated step also writes a `mod1_stN.log` run log
+
+Current Step 2 behavior highlights:
+
+- `Step 2 mode` is `Continuous coordinates (MSD)` (the classic unwrap, with new large-displacement diagnostic warnings) or `Whole molecules in cell` (per-frame whole molecules wrapped back into the box, for structure/density/dipole inputs)
+- `Grouping source` is `From PSF (VMD)` or `Fixed atoms per molecule (no PSF)`
+- optional `Fix 1st Frame` (continuous mode) repairs molecules already split in the first frame; its integer-box shifts are applied consistently to every frame before normal unwrapping
 
 Current COM behavior highlights:
 
@@ -119,6 +123,7 @@ Current behavior highlights:
 - stride control is available for velocity extraction and individual dipole calculations
 - individual dipole magnitude output is optional
 - individual dipole groups do not need to have the same number of atoms
+- `Use reference point (single)` restricts any calculation mode to molecules whose probe atom is within a cutoff of a single moving reference point, runs in pure NumPy from a Module 1 coordinate file and its `.atoms.npz` sidecar (no VMD), and also writes distance vectors/scalars relative to that point
 
 Typical outputs and units:
 
@@ -128,6 +133,7 @@ Typical outputs and units:
 - collective dipole calculations can run VMD in parallel and can optionally wrap coordinates before measuring dipoles
 - collective dipole vector components: selected `Dipole Unit`
 - collective dipole magnitude: selected `Dipole Unit`
+- reference-point (single) mode: `individual`/`custom` write padded `vec_`, `mag_`, `distancevec_`, and `distancemag_` files with a `.counts.npy` sidecar; `collective` writes a per-frame scalar to the output path and a per-frame vector to a `vec_` file
 
 ### 3. MSD and NGP / Anisotropic NGP
 This module generates workflows for:

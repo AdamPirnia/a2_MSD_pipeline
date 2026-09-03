@@ -1,4 +1,5 @@
 import os
+import warnings
 from typing import Any, Sequence
 
 import numpy as np
@@ -251,3 +252,180 @@ def save_numeric_array(
         )
 
     return io_spec
+
+
+# ---------------------------------------------------------------------------
+# Per-frame ("true per-frame selection") coordinate files
+#
+# Step 1 can extract a distance-based selection whose membership changes every
+# frame. Those files are rectangular ``(n_frames, max_atoms * 3)`` arrays with a
+# frame's real atoms in the leading columns and trailing ``(0, 0, 0)`` triplets
+# as padding. An exact per-frame count lives in a ``<path>.counts.npy`` sidecar.
+# Static (constant-membership) coordinate files have no sidecar and no trailing
+# zero padding, so the helpers below leave them untouched.
+# ---------------------------------------------------------------------------
+
+_PER_FRAME_SELECTION_WARNING = (
+    "Per-frame-selection coordinate input: the selected atoms change from frame "
+    "to frame, so column j is a different atom in different frames. Per-atom "
+    "quantities (unwrapping, MSD, per-group COM) are only meaningful if the "
+    "per-frame count is constant."
+)
+
+
+def counts_sidecar_path(coord_path: str) -> str:
+    """Return the per-frame count sidecar path for a coordinate file."""
+    return f"{coord_path}.counts.npy"
+
+
+def load_per_frame_counts(coord_path: str) -> np.ndarray | None:
+    """Return the per-frame atom-count array for ``coord_path`` or ``None``.
+
+    Prefers the exact ``<path>.counts.npy`` sidecar. Falls back to deriving the
+    count from trailing all-zero xyz triplets is left to the caller via
+    :func:`derive_frame_counts` so a genuine origin atom is never silently
+    dropped when the sidecar is present.
+    """
+    sidecar = counts_sidecar_path(coord_path)
+    if os.path.isfile(sidecar):
+        counts = np.load(sidecar, allow_pickle=False)
+        return np.asarray(counts, dtype=np.int64).reshape(-1)
+    return None
+
+
+def derive_frame_counts(coords3d: np.ndarray) -> np.ndarray:
+    """Per-frame count of leading non-padding atoms in a ``(F, A, 3)`` array.
+
+    An atom is padding only if it is exactly ``(0, 0, 0)`` *and* every atom after
+    it in the same frame is also ``(0, 0, 0)`` (trailing run). Interior zeros are
+    kept.
+    """
+    if coords3d.ndim != 3 or coords3d.shape[2] != 3:
+        raise ValueError("derive_frame_counts expects an array shaped (frames, atoms, 3)")
+    n_frames, n_atoms, _ = coords3d.shape
+    nonzero_atom = np.any(coords3d != 0.0, axis=2)  # (F, A)
+    counts = np.full(n_frames, n_atoms, dtype=np.int64)
+    for f in range(n_frames):
+        nz = np.nonzero(nonzero_atom[f])[0]
+        counts[f] = int(nz[-1]) + 1 if nz.size else 0
+    return counts
+
+
+def frames_are_uniform(counts: np.ndarray | None) -> bool:
+    """True when every frame has the same atom count (or ``counts`` is ``None``)."""
+    if counts is None:
+        return True
+    counts = np.asarray(counts).reshape(-1)
+    return counts.size == 0 or bool(np.all(counts == counts[0]))
+
+
+def load_coordinate_frames(
+    input_file: str,
+    spec: dict[str, Any] | None,
+    *,
+    default_mode: str,
+    default_precision: str,
+    default_decimals: int | None = None,
+    mmap_mode: str | None = None,
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Load a coordinate file as ``(coords3d, counts, is_per_frame)``.
+
+    ``coords3d`` has shape ``(n_frames, max_atoms, 3)``. ``counts`` gives the
+    number of real atoms in each frame (equal to ``max_atoms`` for every frame
+    of a static file). ``is_per_frame`` is ``True`` when the file carries a
+    per-frame count sidecar or trailing zero padding.
+    """
+    data = load_numeric_array(
+        input_file,
+        spec,
+        default_mode=default_mode,
+        default_precision=default_precision,
+        default_decimals=default_decimals,
+        mmap_mode=mmap_mode,
+    )
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    n_frames, n_cols = data.shape
+    n_atoms = n_cols // 3
+    coords3d = np.asarray(data[:, : n_atoms * 3]).reshape(n_frames, n_atoms, 3)
+
+    sidecar_counts = load_per_frame_counts(input_file)
+    if sidecar_counts is not None:
+        if sidecar_counts.shape[0] != n_frames:
+            raise ValueError(
+                f"Count sidecar for {input_file} has {sidecar_counts.shape[0]} entries "
+                f"but the coordinate file has {n_frames} frames"
+            )
+        counts = np.clip(sidecar_counts, 0, n_atoms)
+        return coords3d, counts, True
+
+    derived = derive_frame_counts(coords3d)
+    is_per_frame = bool(np.any(derived != n_atoms))
+    counts = derived if is_per_frame else np.full(n_frames, n_atoms, dtype=np.int64)
+    return coords3d, counts, is_per_frame
+
+
+def per_frame_selection_warning() -> str:
+    """Standard warning text for feeding per-frame-selection files to per-atom analyses."""
+    return _PER_FRAME_SELECTION_WARNING
+
+
+def load_numeric_array_trimmed(
+    input_file: str,
+    spec: dict[str, Any] | None,
+    *,
+    default_mode: str,
+    default_precision: str,
+    default_decimals: int | None = None,
+    mmap_mode: str | None = None,
+    context: str = "",
+) -> np.ndarray:
+    """Like :func:`load_numeric_array`, but safe for per-frame-selection files.
+
+    A per-frame-selection coordinate file (identified by a ``<path>.counts.npy``
+    sidecar or by trailing all-zero xyz padding) is trimmed to the ``3 * k``
+    leading columns, where ``k`` is the smallest per-frame atom count, so no
+    padding zeros enter downstream math and every frame keeps the same width.
+    A one-time warning is emitted describing the limitation. Static files are
+    returned unchanged.
+    """
+    data = load_numeric_array(
+        input_file,
+        spec,
+        default_mode=default_mode,
+        default_precision=default_precision,
+        default_decimals=default_decimals,
+        mmap_mode=mmap_mode,
+    )
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    n_frames, n_cols = data.shape
+    n_atoms = n_cols // 3
+
+    sidecar = load_per_frame_counts(input_file)
+    if sidecar is not None:
+        if sidecar.shape[0] != n_frames:
+            raise ValueError(
+                f"Count sidecar for {input_file} has {sidecar.shape[0]} entries "
+                f"but the coordinate file has {n_frames} frames"
+            )
+        counts = np.clip(sidecar, 0, n_atoms)
+    else:
+        coords3d = np.asarray(data[:, : n_atoms * 3]).reshape(n_frames, n_atoms, 3)
+        counts = derive_frame_counts(coords3d)
+        if not bool(np.any(counts != n_atoms)):
+            return data  # static file, no padding
+
+    k = int(counts.min()) if counts.size else n_atoms
+    label = f"{context}: " if context else ""
+    warnings.warn(
+        f"{label}{_PER_FRAME_SELECTION_WARNING} Using the {k} atom slot(s) present "
+        f"in every frame (file holds up to {n_atoms}).",
+        stacklevel=2,
+    )
+    if k <= 0:
+        raise ValueError(
+            f"{input_file} has a frame with zero selected atoms; cannot run a "
+            "per-atom analysis on it."
+        )
+    return np.ascontiguousarray(data[:, : k * 3])

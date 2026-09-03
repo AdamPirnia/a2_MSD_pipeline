@@ -145,6 +145,33 @@ def _vmd_coordinate_temp_path(output_file):
     return f"{output_file}.vmdtmp.bin"
 
 
+def _coords_counts_path(output_file):
+    """Sidecar holding the true per-frame atom count for per-frame selection output."""
+    return f"{output_file}.counts.npy"
+
+
+def _coords_atoms_path(output_file):
+    """Sidecar (.npz) holding the 0-based PSF atom index and resid of every
+    extracted coordinate slot, so residues can be reconstructed from the PSF.
+
+    Static / reference-frame output: 1-D ``index`` and ``resid`` arrays of length
+    ``n_atoms``; slot ``k`` maps to coordinate columns ``3k : 3k+3``.
+    Per-frame-selection output: 2-D ``index`` and ``resid`` arrays shaped
+    ``(n_frames, max_atoms)`` with ``-1`` padding, aligned with the coordinate
+    rows and ``.counts.npy``.
+    """
+    return f"{output_file}.atoms.npz"
+
+
+def _coords_groups_path(output_file):
+    """Sidecar (.npz) holding the resid / segname of every COM group (save_com)."""
+    return f"{output_file}.groups.npz"
+
+
+def _coords_atominfo_temp_path(output_file):
+    return f"{output_file}.atominfo.tmp"
+
+
 def _npy_writing_path(output_file):
     return f"{output_file}.writing.npy"
 
@@ -161,6 +188,10 @@ def _cleanup_binary_coordinate_temp_files(output_file):
         _raw_binary_shape_path(output_file),
         _npy_writing_path(output_file),
         f"{output_file}.writing",
+        f"{_coords_counts_path(output_file)}.writing.npy",
+        f"{_coords_atoms_path(output_file)}.writing.npz",
+        f"{_coords_groups_path(output_file)}.writing.npz",
+        _coords_atominfo_temp_path(output_file),
     ):
         try:
             if os.path.exists(temp_file):
@@ -359,7 +390,199 @@ def _finalize_vmd_temp_coordinate_output(temp_file, output_file, output_io_spec,
             time.sleep(1)
 
 
-def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, save_com=False, grouping_unit="residue", vmd=None, max_workers=None, dcd_indices=None, common_term="", stride=1, wrap_settings=None, output_io_spec=None, vmd_frame_batch_size=None, conversion_chunk_rows=None):
+def _read_vmd_ragged_coordinate_header(handle, temp_file):
+    header_line = handle.readline(256)
+    if not header_line.endswith(b"\n"):
+        raise ValueError(f"Invalid or truncated VMD ragged coordinate header in {temp_file}")
+    header = header_line.decode("ascii", errors="replace").strip().split()
+    if len(header) != 3 or header[0] != "ADMDYNANLZ_COORD_RAGGED_V2":
+        raise ValueError(f"Invalid VMD ragged coordinate header in {temp_file}")
+    dtype_token = header[1]
+    try:
+        n_frames = int(header[2])
+    except ValueError as exc:
+        raise ValueError(f"Invalid VMD ragged coordinate frame count in {temp_file}") from exc
+    if dtype_token == "f4":
+        dtype = np.float32
+    elif dtype_token == "f8":
+        dtype = np.float64
+    else:
+        raise ValueError(f"Unsupported VMD ragged coordinate dtype {dtype_token!r} in {temp_file}")
+    if n_frames <= 0:
+        raise ValueError(f"VMD ragged coordinate temp has invalid frame count ({n_frames}): {temp_file}")
+    return dtype, n_frames
+
+
+def _stream_vmd_ragged_coordinate_output(temp_file, output_file, output_io_spec, conversion_chunk_rows=None):
+    """Convert VMD's ragged per-frame binary output into a zero-padded ``.npy``.
+
+    The temp file holds, after the ASCII header line, one ``int32`` atom count
+    per frame followed by ``count * 3`` coordinate values. The final array is
+    rectangular ``(n_frames, max_atoms * 3)`` with each frame's real atoms in the
+    leading columns and trailing ``(0, 0, 0)`` triplets as padding. An exact
+    per-frame count sidecar ``<output_file>.counts.npy`` is written alongside.
+    """
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+    output_dtype = _output_dtype_for_spec(output_io_spec)
+
+    with open(temp_file, "rb") as handle:
+        temp_dtype, n_frames = _read_vmd_ragged_coordinate_header(handle, temp_file)
+        itemsize = np.dtype(temp_dtype).itemsize
+
+        # Pass 1: read per-frame count, coordinate payload, resid and PSF index.
+        counts = np.zeros(n_frames, dtype=np.int64)
+        frame_values = []
+        frame_resids = []
+        frame_indices = []
+        for f in range(n_frames):
+            count_bytes = handle.read(4)
+            if len(count_bytes) != 4:
+                raise ValueError(f"Unexpected EOF reading frame {f} count from {temp_file}")
+            n_atoms = struct.unpack("<i", count_bytes)[0]
+            if n_atoms < 0:
+                raise ValueError(f"Negative atom count ({n_atoms}) for frame {f} in {temp_file}")
+            counts[f] = n_atoms
+            values = np.fromfile(handle, dtype=temp_dtype, count=n_atoms * 3)
+            if values.size != n_atoms * 3:
+                raise ValueError(f"Unexpected EOF reading frame {f} coordinates from {temp_file}")
+            resids = np.fromfile(handle, dtype="<i4", count=n_atoms)
+            indices = np.fromfile(handle, dtype="<i4", count=n_atoms)
+            if resids.size != n_atoms or indices.size != n_atoms:
+                raise ValueError(f"Unexpected EOF reading frame {f} atom labels from {temp_file}")
+            frame_values.append(values)
+            frame_resids.append(resids)
+            frame_indices.append(indices)
+
+        max_atoms = int(counts.max()) if n_frames else 0
+        if max_atoms <= 0:
+            raise ValueError(f"VMD ragged coordinate output selected no atoms in any frame: {temp_file}")
+
+        n_columns = max_atoms * 3
+        temp_output_file = _npy_writing_path(output_file)
+        if os.path.exists(temp_output_file):
+            os.remove(temp_output_file)
+        array = np.lib.format.open_memmap(
+            temp_output_file,
+            mode="w+",
+            dtype=output_dtype,
+            shape=(n_frames, n_columns),
+        )
+        array[:] = 0
+        resid_grid = np.full((n_frames, max_atoms), -1, dtype=np.int32)
+        index_grid = np.full((n_frames, max_atoms), -1, dtype=np.int32)
+        for f, values in enumerate(frame_values):
+            n_atoms = int(counts[f])
+            if n_atoms:
+                chunk = values.astype(output_dtype, copy=False)
+                if output_io_spec.get("precision") == "custom":
+                    chunk = np.round(chunk, int(output_io_spec["decimals"]))
+                array[f, : n_atoms * 3] = chunk
+                resid_grid[f, :n_atoms] = frame_resids[f]
+                index_grid[f, :n_atoms] = frame_indices[f]
+        array.flush()
+        del array
+
+    counts_writing = f"{_coords_counts_path(output_file)}.writing.npy"
+    atoms_writing = f"{_coords_atoms_path(output_file)}.writing.npz"
+    np.save(counts_writing, counts.astype(np.int32))
+    with open(atoms_writing, "wb") as handle:
+        np.savez(handle, index=index_grid, resid=resid_grid)
+    # Publish the coordinate array first, then the sidecars, so a reader never
+    # sees a sidecar without the matching coordinates.
+    os.replace(temp_output_file, output_file)
+    os.replace(counts_writing, _coords_counts_path(output_file))
+    os.replace(atoms_writing, _coords_atoms_path(output_file))
+
+
+def _finalize_static_atom_label_sidecars(output_file, save_com=False, wait_seconds=60):
+    """Convert VMD's atominfo temp file into ``<output>.atoms.npz`` (index/resid)
+    and, for ``save_com``, ``<output>.groups.npz`` (resid/segname per group).
+
+    The atominfo temp is a small text file written once by the VMD script:
+        ATOMS <resid ...>
+        INDEX <psf-index ...>
+        GROUP_RESID <resid-per-group ...>       (save_com only)
+        GROUP_SEGNAME <segname-per-group ...>   (save_com only)
+    """
+    temp_file = _coords_atominfo_temp_path(output_file)
+    deadline = time.time() + max(0, wait_seconds)
+    while not os.path.exists(temp_file):
+        if time.time() >= deadline:
+            raise FileNotFoundError(f"VMD atom-label sidecar temp not found: {temp_file}")
+        time.sleep(0.5)
+
+    fields = {}
+    with open(temp_file, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            key, _, payload = line.partition(" ")
+            fields[key] = payload.split()
+
+    if "ATOMS" not in fields or "INDEX" not in fields:
+        raise ValueError(f"VMD atom-label sidecar temp is missing ATOMS/INDEX lines: {temp_file}")
+
+    resid = np.asarray(fields["ATOMS"], dtype=np.int32)
+    index = np.asarray(fields["INDEX"], dtype=np.int32)
+    if resid.shape != index.shape:
+        raise ValueError(
+            f"VMD atom-label sidecar mismatch: {resid.size} resid(s) vs {index.size} index(es)"
+        )
+
+    if save_com:
+        # COM output columns are groups, not atoms: the aligned sidecar is the
+        # per-group one. ``index``/``resid`` of the pre-reduction atoms are still
+        # kept, under distinct keys, so group membership can be recovered.
+        group_resid = np.asarray(fields.get("GROUP_RESID", []), dtype=np.int32)
+        group_segname = np.asarray(fields.get("GROUP_SEGNAME", []), dtype="U16")
+        groups_writing = f"{_coords_groups_path(output_file)}.writing.npz"
+        with open(groups_writing, "wb") as handle:
+            np.savez(
+                handle,
+                resid=group_resid,
+                segname=group_segname,
+                member_atom_index=index,
+                member_atom_resid=resid,
+            )
+        os.replace(groups_writing, _coords_groups_path(output_file))
+    else:
+        atoms_writing = f"{_coords_atoms_path(output_file)}.writing.npz"
+        with open(atoms_writing, "wb") as handle:
+            np.savez(handle, index=index, resid=resid)
+        os.replace(atoms_writing, _coords_atoms_path(output_file))
+
+    try:
+        os.remove(temp_file)
+    except OSError:
+        pass
+
+
+def _finalize_vmd_ragged_coordinate_output(temp_file, output_file, output_io_spec, min_temp_mtime=None, status_path=None, wait_seconds=60, conversion_chunk_rows=None):
+    deadline = time.time() + max(0, wait_seconds)
+    last_error = None
+    while True:
+        try:
+            if not os.path.exists(temp_file):
+                raise FileNotFoundError(f"VMD coordinate temp output not found: {temp_file}")
+            if min_temp_mtime is not None and os.path.getmtime(temp_file) < min_temp_mtime:
+                raise FileNotFoundError(f"VMD did not update coordinate temp output: {temp_file}")
+            if os.path.getsize(temp_file) <= 0:
+                raise ValueError(f"VMD wrote an empty coordinate temp output file: {temp_file}")
+            _stream_vmd_ragged_coordinate_output(temp_file, output_file, output_io_spec, conversion_chunk_rows)
+            os.remove(temp_file)
+            return
+        except Exception as exc:
+            last_error = exc
+            if time.time() >= deadline:
+                details = _format_status_tail(status_path) if status_path else ""
+                if details:
+                    raise type(last_error)(f"{last_error}\n{details}") from last_error
+                raise last_error
+            time.sleep(1)
+
+
+def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=None, target_selection=None, save_com=False, grouping_unit="residue", vmd=None, max_workers=None, dcd_indices=None, common_term="", stride=1, wrap_settings=None, output_io_spec=None, vmd_frame_batch_size=None, conversion_chunk_rows=None, selection_mode="reference_frame", reference_frame=0):
     """
     Extracts raw XYZ coordinates from a series of DCD trajectories using VMD in parallel,
     by generating per-segment Tcl scripts, running them in batch, and saving
@@ -417,7 +640,19 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
         Number of saved frames loaded into VMD in each DCD batch.
     conversion_chunk_rows : int, optional
         Number of frame rows converted from the VMD temporary binary output at once.
-    
+    selection_mode : str, optional
+        ``"reference_frame"`` (default) evaluates ``target_selection`` once on
+        ``reference_frame`` and tracks that fixed atom set for every frame; the
+        output is the usual rectangular ``.npy``. ``"per_frame"`` re-evaluates
+        the selection on every frame (needed for a truthful distance-based shell)
+        and writes a zero-padded rectangular ``.npy`` of shape
+        ``(n_frames, max_atoms * 3)`` plus a ``<output>.counts.npy`` sidecar
+        holding the true atom count per frame; trailing ``(0, 0, 0)`` triplets
+        are padding. ``per_frame`` cannot be combined with ``save_com``.
+    reference_frame : int, optional
+        Zero-based DCD frame on which the static selection is evaluated when
+        ``selection_mode="reference_frame"``. Clamped to the trajectory length.
+
     Side Effects
     ------------
     - Creates directories:
@@ -482,6 +717,21 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
     print(f"VMD executable: {vmd}")
     print(f"Stride: {stride}")
     print(f"Wrap enabled: {bool((wrap_settings or {}).get('enabled'))}")
+
+    selection_mode = str(selection_mode or "reference_frame").strip().lower()
+    if selection_mode not in {"reference_frame", "per_frame"}:
+        raise ValueError("selection_mode must be 'reference_frame' or 'per_frame'")
+    try:
+        reference_frame = int(reference_frame)
+    except (TypeError, ValueError):
+        raise ValueError("reference_frame must be an integer >= 0")
+    if reference_frame < 0:
+        raise ValueError("reference_frame must be >= 0")
+    if selection_mode == "per_frame" and save_com:
+        raise ValueError("selection_mode='per_frame' cannot be combined with save_com=True")
+    print(f"Selection mode: {selection_mode}")
+    if selection_mode == "reference_frame":
+        print(f"Reference frame: {reference_frame}")
 
     if save_com and grouping_unit not in {"residue", "chain", "segname"}:
         raise ValueError("grouping_unit must be one of residue, chain, segname when save_com=True")
@@ -579,6 +829,8 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
             wrap_settings,
             output_io_spec,
             vmd_frame_batch_size,
+            selection_mode,
+            reference_frame,
         )
         if not success:
             print(f"ERROR: Failed to generate TCL script for coordinates chunk {i} due to pattern validation failure.")
@@ -596,8 +848,8 @@ def raw_coords(baseDir, psf_pattern, dcd_pattern, output_pattern=None, num_dcd=N
         # Submit all jobs
         future_to_index = {
             executor.submit(
-                _run_vmd_script, i, vmd, baseDir, output_pattern, common_term, output_io_spec, conversion_chunk_rows
-            ): i 
+                _run_vmd_script, i, vmd, baseDir, output_pattern, common_term, output_io_spec, conversion_chunk_rows, selection_mode, save_com
+            ): i
             for i in dcd_list
         }
         
@@ -653,6 +905,8 @@ def _write_tcl_script(
     wrap_settings=None,
     output_io_spec=None,
     vmd_frame_batch_size=None,
+    selection_mode="reference_frame",
+    reference_frame=0,
 ):
     """Write optimized TCL script for a single trajectory chunk."""
     
@@ -732,6 +986,8 @@ def _write_tcl_script(
 
     wrap_settings = wrap_settings or {}
     normalized_output = _normalize_output_io_spec(output_io_spec)
+    is_per_frame = str(selection_mode or "reference_frame").strip().lower() == "per_frame"
+    ref_frame = max(0, min(int(reference_frame or 0), max(0, dcd_frame_count - 1)))
     wrap_enabled = bool(wrap_settings.get("enabled"))
     atomselection = wrap_settings.get("atomselection", "").strip() or target_selection or "all"
     wrap_option_flags = wrap_settings.get("options", {})
@@ -774,6 +1030,7 @@ def _write_tcl_script(
 
     wrap_block = "\n".join(wrap_lines)
     temp_output_full_path = _vmd_coordinate_temp_path(output_full_path)
+    atominfo_temp_full_path = _coords_atominfo_temp_path(output_full_path)
     temp_dtype = _vmd_temp_dtype_for_spec(normalized_output)
     frame_batch_value = os.environ.get("ADMDYNANLZ_VMD_FRAME_BATCH_SIZE", "25") if vmd_frame_batch_size is None else vmd_frame_batch_size
     try:
@@ -788,7 +1045,18 @@ def _write_tcl_script(
         column_expr = "$num_groups * 3"
     else:
         column_expr = "$num_atoms * 3"
-    output_header_block = f"""
+    if is_per_frame:
+        output_header_block = f"""
+# Per-frame selection: VMD writes a ragged temp file (int32 count + count*3 values
+# per frame); Python pads it to a rectangular zero-padded .npy plus a .counts.npy.
+set vmd_payload_format "{_tcl_quote(temp_dtype["tcl_format"])}"
+set output_frames [expr {{($num_frames + $stride - 1) / $stride}}]
+set max_seen 0
+puts $outfile "ADMDYNANLZ_COORD_RAGGED_V2 {_tcl_quote(temp_dtype["label"])} $output_frames"
+status "opened ragged temp output {_tcl_quote(temp_output_full_path)} with $output_frames frame(s)"
+"""
+    else:
+        output_header_block = f"""
 # VMD writes a simple temporary .bin file; Python converts it to the requested final format.
 set vmd_payload_format "{_tcl_quote(temp_dtype["tcl_format"])}"
 set output_frames [expr {{($num_frames + $stride - 1) / $stride}}]
@@ -796,7 +1064,40 @@ set num_columns [expr {{{column_expr}}}]
 puts $outfile "ADMDYNANLZ_COORD_BIN_V1 {_tcl_quote(temp_dtype["label"])} $output_frames $num_columns"
 status "opened temp output {_tcl_quote(temp_output_full_path)} with $output_frames frame(s), $num_columns column(s)"
 """
-    if save_com:
+    if is_per_frame:
+        output_frame_block = f"""
+    # Re-evaluate the (dynamic) selection for this frame
+    set fsel [atomselect $molid "{_tcl_quote(target_selection)}"]
+    $fsel frame $frame
+    set n [$fsel num]
+    puts -nonewline $outfile [binary format i $n]
+    if {{$n > $max_seen}} {{ set max_seen $n }}
+    if {{$n > 0}} {{
+        set coords [$fsel get {{x y z}}]
+        set binary_chunk ""
+        set chunk_atoms 0
+        foreach coord $coords {{
+            append binary_chunk [binary format $vmd_payload_format $coord]
+            incr chunk_atoms
+            if {{$chunk_atoms >= 4096}} {{
+                puts -nonewline $outfile $binary_chunk
+                set binary_chunk ""
+                set chunk_atoms 0
+            }}
+        }}
+        if {{$chunk_atoms > 0}} {{
+            puts -nonewline $outfile $binary_chunk
+        }}
+        # Per-frame atom labels: int32 resid then int32 PSF index, in selection order
+        set info_chunk ""
+        foreach rid [$fsel get resid] {{ append info_chunk [binary format i $rid] }}
+        foreach aidx [$fsel get index] {{ append info_chunk [binary format i $aidx] }}
+        puts -nonewline $outfile $info_chunk
+    }}
+    $fsel delete
+"""
+        output_summary_label = "VMD ragged per-frame coordinate output written to"
+    elif save_com:
         output_frame_block = """
     set binary_chunk ""
     set chunk_groups 0
@@ -877,10 +1178,76 @@ puts "Resolved $num_groups COM group(s) using $grouping_unit"
 if {{$num_groups == 0}} {{
     abort_with_error "No COM groups were resolved from the selected atoms"
 }}
+
+# Group-label sidecar: resid + segname of every COM group (appended to the
+# atom-label sidecar temp written by the selection setup block).
+set __group_info [open "{_tcl_quote(atominfo_temp_full_path)}" a]
+set __group_resids [list]
+set __group_segnames [list]
+foreach group_sel $group_sels {{
+    lappend __group_resids [lindex [$group_sel get resid] 0]
+    lappend __group_segnames [lindex [$group_sel get segname] 0]
+}}
+puts $__group_info "GROUP_RESID [join $__group_resids {{ }}]"
+puts $__group_info "GROUP_SEGNAME [join $__group_segnames {{ }}]"
+close $__group_info
 """
     else:
         group_setup_block = ""
-    
+
+    # Selection setup differs by mode:
+    #  - reference_frame: load one reference frame, evaluate the selection once,
+    #    keep that fixed atom set for the whole trajectory (fixes distance-based
+    #    selections that VMD would otherwise evaluate against unloaded coordinates).
+    #  - per_frame: no up-front selection; it is rebuilt every frame below.
+    if is_per_frame:
+        selection_setup_block = f"""
+# Per-frame selection mode: the atom selection is re-evaluated for every frame.
+puts "Per-frame selection mode; selection '{_tcl_quote(target_selection)}' re-evaluated each frame"
+status "per-frame selection mode"
+"""
+        post_loop_check = f"""
+if {{$max_seen == 0}} {{
+    abort_with_error "Selection '{_tcl_quote(target_selection)}' matched no atoms in any frame"
+}}
+status "per-frame selection widest frame held $max_seen atom(s)"
+"""
+    else:
+        post_loop_check = ""
+    if not is_per_frame:
+        ref_wrap_line = ""
+        if wrap_enabled:
+            ref_wrap_line = (
+                '\nif {[catch {eval pbc wrap $wrap_args} ref_wrap_err]} {\n'
+                '    abort_with_error "pbc wrap failed on reference frame: $ref_wrap_err"\n'
+                '}\n'
+            )
+        selection_setup_block = f"""
+# Reference-frame selection: evaluate the selection once on frame {ref_frame}
+if {{[catch {{mol addfile $DCD type dcd first {ref_frame} last {ref_frame} waitfor all molid $molid}} ref_err]}} {{
+    abort_with_error "failed to load reference frame {ref_frame}: $ref_err"
+}}
+animate goto 0{ref_wrap_line}
+set sel [atomselect $molid "{_tcl_quote(target_selection)}"]
+set num_atoms [$sel num]
+puts "Selected $num_atoms atoms (reference frame {ref_frame})"
+status "selected $num_atoms atom(s) at reference frame {ref_frame}"
+
+if {{$num_atoms == 0}} {{
+    abort_with_error "No atoms selected with criteria '{_tcl_quote(target_selection)}' at reference frame {ref_frame}"
+}}
+
+# Atom-label sidecar: resid + 0-based PSF index of every extracted slot, written
+# once (constant across frames for a static selection).
+set __atominfo [open "{_tcl_quote(atominfo_temp_full_path)}" w]
+puts $__atominfo "ATOMS [$sel get resid]"
+puts $__atominfo "INDEX [$sel get index]"
+close $__atominfo
+status "wrote atom-label sidecar temp for $num_atoms atom(s)"
+
+catch {{animate delete all}}
+"""
+
     with open(f"writenCodes/{tcl_filename}", "w") as f:
         f.write(f"""# Optimized coordinate extraction script for chunk {i}
 # Generated by coordinates_extract.py
@@ -933,17 +1300,7 @@ status "trajectory has $num_frames frame(s)"
 set stride {stride}
 set frame_batch_size {frame_batch_size}
 {wrap_block}
-
-# Create selection
-set sel [atomselect $molid "{_tcl_quote(target_selection)}"]
-set num_atoms [$sel num]
-puts "Selected $num_atoms atoms"
-status "selected $num_atoms atom(s)"
-
-if {{$num_atoms == 0}} {{
-    abort_with_error "No atoms selected with criteria '{_tcl_quote(target_selection)}'"
-}}
-
+{selection_setup_block}
 {group_setup_block}
 {output_open_block}
 {output_header_block}
@@ -992,7 +1349,10 @@ for {{set batch_start 0}} {{$batch_start < $num_frames}} {{incr batch_start [exp
     catch {{animate delete all}}
 }}
 
-$sel delete
+{post_loop_check}
+if {{[info exists sel]}} {{
+    catch {{$sel delete}}
+}}
 if {{[info exists group_sels]}} {{
     foreach group_sel $group_sels {{
         $group_sel delete
@@ -1023,8 +1383,10 @@ exit 0
     return True
 
 
-def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", output_io_spec=None, conversion_chunk_rows=None):
+def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", output_io_spec=None, conversion_chunk_rows=None, selection_mode="reference_frame", save_com=False):
     """Run a single VMD script and return results."""
+
+    is_per_frame = str(selection_mode or "reference_frame").strip().lower() == "per_frame"
     
     # Use the same naming convention as in _write_tcl_script
     tcl_filename = f"coords_{common_term}_{index}.tcl" if common_term else f"coords_{index}.tcl"
@@ -1035,6 +1397,18 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
     status_path = _coords_status_path(common_term, index)
     normalized_output = _normalize_output_io_spec(output_io_spec)
     _cleanup_binary_coordinate_temp_files(output_file)
+    # Remove stale sidecars so a re-run in a different mode cannot leave a
+    # mismatched count/label file next to the fresh coordinates.
+    for stale in (
+        _coords_counts_path(output_file),
+        _coords_atoms_path(output_file),
+        _coords_groups_path(output_file),
+    ):
+        try:
+            if os.path.exists(stale):
+                os.remove(stale)
+        except OSError:
+            pass
     try:
         if os.path.exists(status_path):
             os.remove(status_path)
@@ -1096,7 +1470,12 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
 
         if success:
             try:
-                _finalize_vmd_temp_coordinate_output(
+                finalize_fn = (
+                    _finalize_vmd_ragged_coordinate_output
+                    if is_per_frame
+                    else _finalize_vmd_temp_coordinate_output
+                )
+                finalize_fn(
                     temp_output_file,
                     output_file,
                 normalized_output,
@@ -1104,6 +1483,8 @@ def _run_vmd_script(index, vmd_path, baseDir, output_pattern, common_term="", ou
                 status_path=status_path,
                 conversion_chunk_rows=conversion_chunk_rows,
             )
+                if not is_per_frame:
+                    _finalize_static_atom_label_sidecars(output_file, save_com=save_com)
             except Exception as e:
                 error_msg = f"Converting VMD coordinate temp output failed: {e}"
                 write_vmd_log(error_msg)

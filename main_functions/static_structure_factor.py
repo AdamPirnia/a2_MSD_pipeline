@@ -12,10 +12,10 @@ from typing import Any
 import numpy as np
 
 try:
-    from .numeric_io import load_numeric_array, save_numeric_array
+    from .numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
     from .path_utils import expand_path_pattern, validate_path_pattern
 except ImportError:
-    from numeric_io import load_numeric_array, save_numeric_array
+    from numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
     from path_utils import expand_path_pattern, validate_path_pattern
 
 
@@ -2838,8 +2838,8 @@ def compute_charge_charge_structure_factor_from_files(
     for file_index, coord_file1, coord_file2 in zip(selected_file_indices, files1, files2, strict=False):
         trajectory_start = time.time()
         print(f"\nProcessing charge-charge file set {file_index} ({len(per_file_stats) + 1}/{len(files1)})", flush=True)
-        coords1_raw = load_numeric_array(coord_file1, input_io_spec, default_mode="text", default_precision="double")
-        coords2_raw = coords1_raw if os.path.abspath(coord_file2) == os.path.abspath(coord_file1) else load_numeric_array(coord_file2, input_io_spec, default_mode="text", default_precision="double")
+        coords1_raw = load_numeric_array_trimmed(coord_file1, input_io_spec, default_mode="text", default_precision="double", context=f"S(k) charge-charge coord file {file_index} path 1")
+        coords2_raw = coords1_raw if os.path.abspath(coord_file2) == os.path.abspath(coord_file1) else load_numeric_array_trimmed(coord_file2, input_io_spec, default_mode="text", default_precision="double", context=f"S(k) charge-charge coord file {file_index} path 2")
         coords1 = _prepare_xyz_frames(coords1_raw, name=str(coord_file1))
         coords2 = _prepare_xyz_frames(coords2_raw, name=str(coord_file2))
         if int(coords1.shape[1]) != int(charge_values1_all.shape[0]):
@@ -4971,11 +4971,12 @@ def _compute_single_trajectory_sk_report(args: tuple[Any, ...]) -> dict[str, Any
     try:
         start_time = time.time()
         print(f"\nProcessing coordinate file: {file_path}", flush=True)
-        array = load_numeric_array(
+        array = load_numeric_array_trimmed(
             file_path,
             input_io_spec,
             default_mode="text",
             default_precision="double",
+            context=f"S(k) coordinate file {trajectory_index}",
         )
         coords, _ = _prepare_coordinate_array(array)
         coords = _apply_frame_stride(coords, coords_stride, label="Coordinate Path")
@@ -5063,11 +5064,12 @@ def _compute_single_trajectory_directional_sk_report(args: tuple[Any, ...]) -> d
     try:
         start_time = time.time()
         print(f"\nProcessing coordinate file: {file_path}", flush=True)
-        array = load_numeric_array(
+        array = load_numeric_array_trimmed(
             file_path,
             input_io_spec,
             default_mode="text",
             default_precision="double",
+            context=f"S(k) coordinate file {trajectory_index}",
         )
         coords, _ = _prepare_coordinate_array(array)
         coords = _apply_frame_stride(coords, coords_stride, label="Coordinate Path")

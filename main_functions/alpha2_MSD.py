@@ -3,9 +3,9 @@ import os
 import time
 import warnings
 try:
-    from .numeric_io import load_numeric_array, save_numeric_array
+    from .numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
 except ImportError:
-    from numeric_io import load_numeric_array, save_numeric_array
+    from numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
 import re
 # Inlined path_utils functions to keep generated/runtime scripts self-contained
 _SAFE_INDEX_EXPR = re.compile(r"^i(?:\s*[+\-*/]\s*\d+)?$")
@@ -233,11 +233,12 @@ def a2_MSD(
                     continue
                 
                 # Load trajectory data
-                data = load_numeric_array(
+                data = load_numeric_array_trimmed(
                     file_path,
                     input_io_spec,
                     default_mode="text",
                     default_precision="double",
+                    context=f"MSD input file {f}",
                 )
                 if input_stride > 1:
                     data = data[::input_stride]

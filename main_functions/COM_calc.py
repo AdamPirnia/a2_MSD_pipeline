@@ -7,9 +7,9 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
 try:
-    from .numeric_io import load_numeric_array, save_numeric_array
+    from .numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
 except ImportError:
-    from numeric_io import load_numeric_array, save_numeric_array
+    from numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
 import re
 # Inlined path_utils functions to keep generated/runtime scripts self-contained
 _SAFE_INDEX_EXPR = re.compile(r"^i(?:\s*[+\-*/]\s*\d+)?$")
@@ -66,12 +66,13 @@ def validate_path_pattern(pattern):
 
 def _load_coordinate_array(input_file, dtype=np.float64, io_spec=None, mmap_mode=None):
     """Load coordinate data using the configured storage mode and precision."""
-    data = load_numeric_array(
+    data = load_numeric_array_trimmed(
         input_file,
         io_spec,
         default_mode="binary",
         default_precision="single",
         mmap_mode=mmap_mode,
+        context=f"COM input {os.path.basename(input_file)}",
     )
     if mmap_mode:
         return np.asarray(data)

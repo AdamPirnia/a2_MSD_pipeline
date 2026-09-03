@@ -11,10 +11,10 @@ from typing import Any
 import numpy as np
 
 try:
-    from .numeric_io import load_numeric_array, save_numeric_array
+    from .numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
     from .path_utils import expand_path_pattern
 except ImportError:
-    from numeric_io import load_numeric_array, save_numeric_array
+    from numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
     from path_utils import expand_path_pattern
 
 
@@ -304,20 +304,22 @@ def _rdf_file_task(params: dict[str, Any]) -> dict[str, Any]:
     coords_slice1 = params.get("coords_slice1") or params.get("coords_slice") or _slice_from_stride(params["coords_stride"])
     coords_slice2 = params.get("coords_slice2") or coords_slice1
     try:
-        data1 = load_numeric_array(
+        data1 = load_numeric_array_trimmed(
             input_file1,
             input_io_spec,
             default_mode="text",
             default_precision="double",
+            context=f"RDF coordinate path 1 file {file_index}",
         )
         if os.path.abspath(input_file2) == os.path.abspath(input_file1):
             data2 = data1
         else:
-            data2 = load_numeric_array(
+            data2 = load_numeric_array_trimmed(
                 input_file2,
                 input_io_spec,
                 default_mode="text",
                 default_precision="double",
+                context=f"RDF coordinate path 2 file {file_index}",
             )
         coords1 = _prepare_coordinate_frames(data1, label=f"Coordinate Path 1 file {file_index}")
         coords2 = _prepare_coordinate_frames(data2, label=f"Coordinate Path 2 file {file_index}")

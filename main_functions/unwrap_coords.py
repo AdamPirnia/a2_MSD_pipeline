@@ -6,9 +6,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
 import warnings
 try:
-    from .numeric_io import load_numeric_array, save_numeric_array
+    from .numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
 except ImportError:
-    from numeric_io import load_numeric_array, save_numeric_array
+    from numeric_io import load_numeric_array, load_numeric_array_trimmed, save_numeric_array
 import re
 # Inlined path_utils functions to keep generated/runtime scripts self-contained
 _SAFE_INDEX_EXPR = re.compile(r"^i(?:\s*[+\-*/]\s*\d+)?$")
@@ -107,13 +107,47 @@ def _tcl_quote(value):
 
 def _load_coordinate_array(input_file, dtype=np.float32, io_spec=None):
     """Load coordinate data using the configured storage mode and precision."""
-    data = load_numeric_array(
+    data = load_numeric_array_trimmed(
         input_file,
         io_spec,
         default_mode="binary",
         default_precision="single",
+        context=f"unwrap input {os.path.basename(input_file)}",
     )
     return np.asarray(data, dtype=dtype)
+
+
+def _propagate_atom_label_sidecars(input_file, output_file, usable_atoms):
+    """Carry Step 1's ``.atoms.npz`` / ``.counts.npy`` sidecars to the Step 2
+    output. Unwrapping preserves atom order and count, so the labels transfer
+    directly; arrays are sliced to ``usable_atoms`` when the coordinates were
+    trimmed (e.g. a non-uniform per-frame-selection input).
+    """
+    counts_src = f"{input_file}.counts.npy"
+    if os.path.exists(counts_src):
+        try:
+            counts = np.load(counts_src, allow_pickle=False)
+            np.save(f"{output_file}.counts.npy", np.clip(np.asarray(counts), 0, usable_atoms).astype(np.int32))
+        except Exception as exc:  # best-effort: never break the unwrap over a sidecar
+            warnings.warn(f"Could not propagate {counts_src}: {exc}")
+
+    atoms_src = f"{input_file}.atoms.npz"
+    if os.path.exists(atoms_src):
+        try:
+            with np.load(atoms_src, allow_pickle=False) as bundle:
+                arrays = {}
+                for key in bundle.files:
+                    arr = bundle[key]
+                    if arr.ndim == 1:
+                        arrays[key] = arr[:usable_atoms]
+                    elif arr.ndim == 2:
+                        arrays[key] = arr[:, :usable_atoms]
+                    else:
+                        arrays[key] = arr
+            with open(f"{output_file}.atoms.npz", "wb") as handle:
+                np.savez(handle, **arrays)
+        except Exception as exc:
+            warnings.warn(f"Could not propagate {atoms_src}: {exc}")
 
 
 def _save_coordinate_array(output_file, data, io_spec=None):
@@ -1066,6 +1100,7 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
                     "order is wrong for this selection."
                 )
             _save_coordinate_array(output_file, coords.reshape(n_frames, -1), io_spec=output_io_spec)
+            _propagate_atom_label_sidecars(input_file, output_file, usable_atoms)
             print(
                 f"✓ Made {len(group_indices)} molecule(s) whole in {n_frames} frame(s) "
                 f"and wrapped into the cell: {input_file_rel} -> {output_file_rel}"
@@ -1141,6 +1176,7 @@ def _unwrap_single_file(file_index, baseDir, input_pattern, output_pattern, xsc_
         # Flatten back to (n_frames, n_cols)
         unwrapped_flat = unwrapped.reshape(n_frames, -1)
         _save_coordinate_array(output_file, unwrapped_flat, io_spec=output_io_spec)
+        _propagate_atom_label_sidecars(input_file, output_file, usable_atoms)
 
         print(f"✓ Completed {input_file_rel} -> {output_file_rel}")
         

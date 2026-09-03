@@ -238,10 +238,25 @@ Fields:
 - `Target Selections`: VMD atom selection string, such as `water`, `protein`, or a more specific selection
 - `?` help button: opens the VMD atom-selection reference in your default browser
 - `VMD path`: full path to the VMD executable
+- `Selection Mode`: how a dynamic target selection (one whose membership depends on coordinates, e.g. `resname SPCE and within 3 of resname C180`) is evaluated; see below
+- `Reference frame`: zero-based frame index used by `Reference-frame static set`; default `0`, clamped to the trajectory length. Disabled in `True per-frame selection` mode.
 - `DCD Selection`: optional subset of DCD indices to extract
 - `Stride`: required frame sampling stride; use `1` for every frame, `10` for every tenth frame
 - `Frame Chunks: VMD`: required number of saved frames loaded into VMD per Step 1 DCD batch
 - `Frame Chunks: Python`: required number of frame rows converted from VMD temporary binary output at once
+
+### Selection Mode
+
+- `Reference-frame static set` (default): VMD loads the single `Reference frame` (with optional wrapping), evaluates `Target Selections` once on it, and then tracks that fixed set of atoms for the whole trajectory. Output is a rectangular `.npy` exactly as in earlier versions and feeds Steps 2/3 and the MSD module unchanged. Use this whenever the physical set of atoms you want is fixed, even if you wrote the selection with a distance clause. Earlier versions effectively evaluated a distance-based selection before any frame was loaded (so `within` matched everything); choosing this mode with an explicit `Reference frame` is the correct behavior.
+- `True per-frame selection`: VMD re-evaluates `Target Selections` on every frame, so the atom set changes frame to frame. Output is a zero-padded `(n_frames, max_atoms x 3)` `.npy` plus a `<output>.npy.counts.npy` sidecar holding the true atom count for each frame; trailing `0,0,0` triplets are padding. Per-atom identity is **not** preserved across frames. This mode cannot be combined with `COM` output. Downstream modules that consume such a file trim every frame to the smallest per-frame count and print a one-time warning.
+
+### Atom-label sidecar
+
+Every Step 1 run also writes `<output>.npy.atoms.npz`, containing the 0-based PSF atom `index` and `resid` of each extracted coordinate slot (1-D arrays for `Reference-frame static set`, 2-D `-1`-padded arrays for `True per-frame selection`). When `COM` output is enabled it additionally writes `<output>.npy.groups.npz` with the `resid` and `segname` of each COM group. These sidecars let you reconstruct residues from the PSF later; the analysis modules do not read them, but the reference-point dipole mode in Module 2 does. Step 2 copies the sidecars forward to its own output on a best-effort basis.
+
+### Per-step run logs
+
+Each generated Step 1/2/3 script writes `mod1_st1.log` / `mod1_st2.log` / `mod1_st3.log` (the common-term label is appended when non-empty) next to the script. The log captures a configuration header, all step output including parallel-worker output, a summary of the produced files (frame count and per-frame particle count), and a wall-time footer even if the step fails. Logging is best-effort and never blocks the analysis; terminal and SLURM output are unchanged.
 
 Options:
 
@@ -270,53 +285,60 @@ Output unit:
 
 ## Step 2: Continuous coordinates
 
-This step removes periodic-boundary discontinuities and reconstructs continuous particle trajectories.
+This step removes periodic-boundary artifacts. It has two modes selected by the `Step 2 mode` dropdown.
 
 Fields:
 
 - `Input Pattern`: full input `path + filename + extension` pattern for wrapped coordinate files
-- `Output Pattern`: full output `path + filename + extension` pattern for continuous-coordinate files
+- `Output Pattern`: full output `path + filename + extension` pattern for Step 2 output files
+- `Step 2 mode`: `Continuous coordinates (MSD)` or `Whole molecules in cell`; see below
 - `Ensemble`: `Constant Volume` (NVT) or `Constant Pressure` (NPT); see below
 - `XSC file`: file containing simulation box dimensions. For `Constant Volume`, one box-size snapshot is enough (the last frame of the resolved XSC file is used for the whole run, unchanged from prior versions). For `Constant Pressure`, this must resolve to a trajectory of box dimensions with one row per coordinate frame for each DCD index — a single restart-style snapshot is not enough, since the box changes frame to frame.
 - `Num atoms`: total number of atoms in each extracted coordinate file
 - `Interval`: optional frame interval expression to restrict the processed frame range
-- `Stride`: frame stride used during unwrapping
+- `Stride`: frame stride used during Step 2
 - `DCD Selection`: optional subset of DCD indices to process
 - `Chunk Size` / `Workers`: memory-related processing chunk size (or `auto`) and maximum worker processes, on one row
 
 Option:
 
-- `Use Parallel`: enable parallel processing for the unwrapping step
-- `Fix 1st Frame`: optionally repair molecules that are already split across periodic boundaries in the first input frame before continuous coordinates are reconstructed
+- `Use Parallel`: enable parallel processing for Step 2
 
-When `Fix 1st Frame` is checked, Step 2 enables extra metadata fields in the Options section:
+### Step 2 mode
 
-- `PSF Pattern`: PSF file pattern used to resolve atom grouping for the first-frame repair
-- `Target Selection`: VMD atom selection matching the atom order in the Step 2 coordinate input files
-- `VMD Path`: VMD executable used to resolve the PSF and atom selection
-- `Grouping Unit`: grouping used to define each molecule or unit to repair; currently `residue`, `chain`, or `segname`; `residue` groups by VMD `segid + resid`
+- `Continuous coordinates (MSD)` (default): the original unwrapping — each atom's trajectory is made continuous across periodic images so frame-to-frame displacements are never folded at the box boundary. This is the input MSD and diffusion analysis expect. It offers the optional `Fix 1st Frame` checkbox (see below). It also prints diagnostic warnings, with frame indices, when a corrected inter-frame displacement exceeds half the box length or when a molecule ends up spanning more than half the box after unwrapping — both are signs of a bad, duplicate, or out-of-order frame, a wrong box, or too coarse a save interval.
+- `Whole molecules in cell`: for every frame independently, each molecule is first made whole and then wrapped back into the primary cell by its center. The result is a wrapped trajectory in which no molecule is ever split across the boundary. This is the right input for structure factors, densities, and dipoles. It is **not** suitable for MSD, because it re-wraps every frame. Unlike the older "Wrap Groups Into Cell" option, which only translated molecules that were already whole, this mode reconstructs whole molecules from scratch, so it is immune to save frequency and single-frame glitches.
+  - `Wrap centre`: `cell` places every molecule's center inside the box; `extracted selection COM` additionally recenters the whole selection's center of mass at the box center each frame.
+
+### Grouping source
+
+`Whole molecules in cell`, and `Fix 1st Frame` in continuous mode, need to know which atoms form each molecule. The `Grouping source` dropdown chooses how:
+
+- `From PSF (VMD)`: VMD resolves residues, chains, or segments and also reads atom masses and bonds. The bond graph is used to build each whole molecule exactly for any topology. Fields: `PSF Pattern`, `Target Selection` (must match the Step 2 coordinate input atom order), `VMD Path`, and `Grouping Unit` (`residue` = VMD `segid + resid`, `chain`, or `segname`).
+- `Fixed atoms per molecule (no PSF)`: no topology file is used. `Atoms / molecule` accepts a single integer (`3`), a repeat form (`3x1000`), or a comma list (`3,3,10`); consecutive atoms are grouped into those blocks and each block is made whole by its running centroid. The total must equal the coordinate file's atom count. Use this when you have no PSF.
+- Groups with no usable bonds fall back to the centroid method with a warning.
 
 ### What `Fix 1st Frame` does
 
-Use this option when the Step 2 input trajectory starts from a later part of a longer trajectory and the first saved frame already contains molecules split across periodic boundaries.
+`Fix 1st Frame` is available in `Continuous coordinates (MSD)` mode. Use it when the Step 2 input trajectory starts from a later part of a longer trajectory and the first saved frame already contains molecules split across periodic boundaries.
 
 When enabled, Step 2:
 
-- resolves the selected atoms and groups using the Step 2 `PSF Pattern`, `Target Selection`, `VMD Path`, and `Grouping Unit`
-- repairs the first coordinate frame group by group so each selected group is made whole using minimum-image offsets
+- resolves the molecules using the `Grouping source` (PSF or fixed blocks)
+- makes each molecule whole in the first frame and wraps it into the cell; because these shifts are exact integer multiples of the box, continuity is preserved
 - computes the exact per-atom coordinate shifts between the original first frame and the repaired first frame
 - applies those same per-atom shifts to every frame in the Step 2 input coordinate file
 - then runs the normal continuous-coordinate unwrapping algorithm
 
-The `Target Selection` used for `Fix 1st Frame` must match the atom order in the Step 2 input coordinate files. If the resolved atom count does not match the coordinate file width, the workflow stops with an error.
+When `Grouping source = From PSF (VMD)`, the `Target Selection` must match the atom order in the Step 2 input coordinate files; if the resolved atom count does not match the coordinate file width, the workflow stops with an error. When `Grouping source = Fixed atoms per molecule (no PSF)`, the `Atoms / molecule` total must match instead.
 
-If `Fix 1st Frame` is unchecked, Step 2 behaves as before and uses the first frame exactly as it appears in the input coordinate file.
+If `Fix 1st Frame` is unchecked, `Continuous coordinates (MSD)` mode uses the first frame exactly as it appears in the input coordinate file.
 
 What this section does:
 
 - reads wrapped coordinates
 - uses the box information from the XSC file (a single snapshot for `Constant Volume`, or a per-frame box trajectory for `Constant Pressure`)
-- reconstructs continuous trajectories across periodic boundaries
+- reconstructs continuous trajectories (`Continuous coordinates (MSD)`) or per-frame whole wrapped molecules (`Whole molecules in cell`)
 
 ### Ensemble: Constant Volume vs. Constant Pressure
 
@@ -400,7 +422,7 @@ You can enable either one or both, depending on the scripts you want to generate
 
 The Velocities and Dipoles module has its own optimizer. Use the `Optimize` dropdown to choose `Velocity Extraction` or `Dipole Calculations`; when opened, it defaults to the tab you are currently viewing.
 
-For dipoles, the estimate follows the current `Calculation Method`: individual dipoles estimate NumPy coordinate/COM array memory, while collective dipoles estimate VMD trajectory and optional wrapping memory.
+For dipoles, the estimate follows the current `Calculation Mode`: individual dipoles estimate NumPy coordinate/COM array memory, while collective dipoles estimate VMD trajectory and optional wrapping memory. When `Use reference point (single)` is enabled the NumPy estimate is used for every mode, since that path does not run VMD.
 
 ## Velocity Extraction tab
 
@@ -436,11 +458,12 @@ Output unit:
 
 ## Dipole Calculations tab
 
-This workflow can generate either individual dipole scripts or collective dipole scripts.
+This workflow generates individual, custom, or collective dipole scripts, optionally in the reference-point (single) variant.
 
 Field:
 
-- `Calculation Method`: choose `individual`, `collective`, or `custom`
+- `Calculation Mode`: choose `individual`, `collective`, or `custom`
+- `Use reference point (single)` checkbox and `From reference point (single)` button: to the right of `Calculation Mode`. Enable the checkbox to run the reference-point variant of whichever mode is selected; the button opens its settings dialog. See "Reference-point (single) dipole mode" below.
 - `PSF Pattern`: full input `path + filename + extension` pattern for the PSF used by both dipole methods
 - `Target Selection`: VMD atom selection defining the atoms included in dipole calculations
 - `VMD Path`: full path to the VMD executable
@@ -448,7 +471,7 @@ Field:
 - `Dipole Unit`: output dipole unit, either `Debye` or `e·Å`
 - `DCD Selection`: optional subset of DCD indices to process
 
-### If `Calculation Method = individual`
+### If `Calculation Mode = individual`
 
 Use these fields:
 
@@ -491,7 +514,7 @@ Important input note:
 - the coordinate file must match the atom selection resolved from the PSF
 - when `All neutral particles` is not checked, the `COM Patterns` file must contain one COM vector per resolved group for each frame
 
-### If `Calculation Method = custom`
+### If `Calculation Mode = custom`
 
 Individual per-group dipoles computed directly from a DCD trajectory through VMD, with more selection flexibility than `individual` mode (no pre-extracted coordinate file is needed).
 
@@ -507,7 +530,7 @@ What it does:
 - computes one dipole vector (and magnitude) per resolved group per frame using VMD's `measure dipole`
 - groups absent from a given frame are stored as `NaN` in the saved arrays, distinguishable from a true-zero dipole
 
-### If `Calculation Method = collective`
+### If `Calculation Mode = collective`
 
 Use these fields:
 
@@ -523,7 +546,7 @@ What it does:
 
 Notes:
 
-- shared fields stay active regardless of `Calculation Method`
+- shared fields stay active regardless of `Calculation Mode`
 - method-specific fields are grouped at the top of the dipole section
 - `Skip` disables the dipole block entirely
 
@@ -531,6 +554,33 @@ Output units:
 
 - the collective output file contains frame index, dipole vector components, and dipole magnitude
 - both vector components and magnitude are written in the selected `Dipole Unit`
+
+### Reference-point (single) dipole mode
+
+Check `Use reference point (single)` to restrict any of the three calculation modes to molecules that are currently close to a single moving point (for example a probe site or the center of an interface). This mode runs in pure NumPy with no VMD: it reads the `Coordinates Pattern` produced by Module 1 Step 1 or Step 2, together with that file's `.atoms.npz` sidecar, so the `Coordinates Pattern`, `Grouping Unit`, `All neutral particles`, `Output Pattern`, `Dipole Unit`, `Stride`, and `DCD Selection` fields stay active while the DCD Pattern, VMD Path, COM Patterns, and collective `Options` are ignored.
+
+The `From reference point (single)` dialog has five fields:
+
+- `Ref. Point Pattern`: path pattern to a coordinate trajectory of one point, shaped `(n_frames, 3)`. Its frame count must match the coordinate file (stride is applied to both).
+- `Cutoff distance`: in coordinate units. A molecule (or grouping unit) contributes at a given frame only while its probe atom is within this distance of the reference point.
+- `PSF Pattern`: PSF read directly for each atom's charge, mass, name, resname, segid, and resid.
+- `Probe Name (resname)`: residue name (as written in the PSF) of the molecule that carries the probe atom.
+- `Probe Atom Name`: atom name (as written in the PSF) of the probe atom used for the cutoff test.
+
+Conventions: all vectors use `position - reference`; distances are plain Euclidean with no minimum-image correction, so wrap the coordinates upstream (Step 1 `Wrap Coordinates` or Step 2 `Whole molecules in cell`) if periodicity matters. Grouping is keyed on PSF `segid + resid`. The coordinate file must have a fixed atom set (`Reference-frame static set` from Step 1); a `True per-frame selection` file is rejected. The dipole sign is the usual negative-to-positive-pole convention; `Debye` applies the unit conversion and `e·Å` does not.
+
+Outputs, with `<base>` the active `Output Pattern` and prefixes added to the file name:
+
+- `individual` / `custom`: because the qualifying set changes each frame, results are left-packed into padded rectangular arrays with a `<vec_base>.counts.npy` sidecar giving the true count per frame and `<vec_base>.groups.npy` / `.groups.json` mapping each packed slot to its `segid`/`resid`.
+  - `vec_<base>`: dipole vectors, `(n_frames, max_hits x 3)`
+  - `mag_<base>`: dipole magnitudes, `(n_frames, max_hits)`
+  - `distancevec_<base>`: `molecule_center - reference_point`, `(n_frames, max_hits x 3)`
+  - `distancemag_<base>`: `|molecule_center - reference_point|`, `(n_frames, max_hits)`
+  - the molecule center is the same one the dipole uses (mass-weighted COM, or geometric center when `All neutral particles` is checked)
+- `collective`, over every atom of every qualifying molecule at each frame:
+  - the collective `Output Pattern` receives the scalar `S(f) = sum_i q_i * |r_i - p_f|`, one value per frame
+  - `vec_<Output Pattern>` receives the vector `M(f) = sum_i q_i * (r_i - p_f)`, three components per frame
+  - `S(f)` depends on where the reference point is and is not a rotationally invariant dipole; it is written exactly as defined here. Both outputs use the selected `Dipole Unit`.
 
 ## Module 3: MSD and NGP / Anisotropic NGP
 
